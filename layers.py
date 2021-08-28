@@ -34,4 +34,13 @@ class MiniBatchStddev(nn.Module):
         v = torch.mean(std)
         output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),device=self.device)),dim=1)
         return output
- 
+
+class GlobalSum(nn.Module):
+    def __init__(self): 
+        super().__init__()
+
+    def forward(self,inputs):
+        return torch.sum(inputs,dim=(-1,-2))
+
+
+        

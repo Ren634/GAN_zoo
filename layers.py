@@ -19,8 +19,8 @@ class PixelNorm2d(nn.Module):
         self.epsilon = epsilon
 
     def forward(self,inputs):
-        numerator = torch.mean(inputs**2,dim=0) + self.epsilon
-        output = inputs / numerator
+        denominator = torch.mean(inputs**2,dim=0) + self.epsilon
+        output = inputs / denominator
         return output
 
 class MiniBatchStddev(nn.Module):

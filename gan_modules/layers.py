@@ -3,15 +3,32 @@ import torch
 from torch.nn import functional as F
 from torch import nn
 
-def sn_conv2d(**kwargs):
-    layer = nn.utils.spectral_norm(nn.Conv2d(**kwargs))
+def sn_conv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+    layer = nn.utils.spectral_norm(
+        nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            stride=stride,
+            kernel_size=kernel_size,
+            padding=padding,
+            bias=bias,
+            **kwargs)
+        ) 
     return layer
 
-def sn_linear(**kwargs):
-    return nn.utils.spectral_norm(nn.Linear(**kwargs,))
+def sn_linear(in_features,out_features,bias=True,**kwargs):
+    return nn.utils.spectral_norm(nn.Linear(in_features=in_features,out_features=out_features,bias=bias,**kwargs))
 
-def sn_tconv2d(**kwargs):
-    layer = nn.utils.spectral_norm(nn.ConvTranspose2d(**kwargs))
+def sn_tconv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+    layer = nn.utils.spectral_norm(
+        nn.ConvTranspose2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            **kwargs)
+        )
     return layer
 
 class PixelNorm2d(nn.Module):
@@ -70,4 +87,4 @@ class SelfAttention(nn.Module):
         return x  + attention_map_v * self.gamma
 
 
-        
+ 

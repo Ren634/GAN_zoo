@@ -4,13 +4,9 @@ import warnings # to hide Named tensors warnings when uses max_pooling. This is 
 from tqdm.notebook import tqdm 
 from torch.nn import functional as F
 from torch import nn
-from self_attention import SelfAttention
-from gan_utils import save_img,GAN
-from losses import hinge,Wgangp
-from layers import sn_conv2d,sn_linear,sn_tconv2d,MiniBatchStddev
+from gan_modules import *
 from torch.utils import tensorboard
 from math import log2
-from different_augmentation import DifferentAugmentation
 
 warnings.simplefilter("ignore")
 
@@ -30,7 +26,7 @@ class ResBlockG(nn.Module):
                 nn.Upsample(scale_factor=2),
                 sn_conv2d(in_channels=in_channels,out_channels=out_channels,kernel_size=kernel_size,padding=1,bias=False)
             )
-        self.branched_layer = nn.Sequential(
+        self.main = nn.Sequential(
             nn.BatchNorm2d(in_channels),
             get_activation(activation,alpha),
             upsampling,
@@ -41,7 +37,7 @@ class ResBlockG(nn.Module):
             get_activation(activation,alpha),
             sn_conv2d(in_channels=out_channels,out_channels=out_channels,kernel_size=kernel_size,padding=1,bias=False),
         )
-        self.main = nn.Sequential(
+        self.shutcut = nn.Sequential(
             upsampling,
             nn.BatchNorm2d(out_channels),
             get_activation(activation,alpha),
@@ -49,14 +45,14 @@ class ResBlockG(nn.Module):
         )
 
     def forward(self,inputs):
-        branched = self.branched_layer(inputs)
-        x = self.main(inputs)
-        output = x + branched
+        main = self.main(inputs)
+        shutcut = self.shutcut(inputs)
+        output = main+shutcut
         return output
 
 
 class Generator(nn.Module):
-    def __init__(self,n_dims=512,max_resolutions=256,lr=1e-3,betas=(0,0.9),initial_layer="tconv",upsampling_mode="tconv"):
+    def __init__(self,n_dims=512,max_resolutions=256,initial_layer="tconv",upsampling_mode="tconv",attention_loc=32):
         super().__init__()
         self.n_dims = n_dims
         self.initial_layer = initial_layer
@@ -75,12 +71,13 @@ class Generator(nn.Module):
             512:8
         }
         self.layers = nn.ModuleList([ResBlockG(in_channels=self.n_dims, out_channels=out_channels[4],upsampling_mode=upsampling_mode)]) 
-        for index in range(int(log2(max_resolutions))-4):
-            if(index==2):
-                self.layers.append(SelfAttention(in_channels=out_channels[2**(2+index)]))
-            self.layers.append(ResBlockG(in_channels=out_channels[2**(2+index)],out_channels=out_channels[2**(3+index)],upsampling_mode=upsampling_mode))
+        for index in range(3,int(log2(max_resolutions))-1):
+            self.layers.append(ResBlockG(in_channels=out_channels[2**(index-1)],out_channels=out_channels[2**(index)],upsampling_mode=upsampling_mode))
+            if(attention_loc == 2**(index)):
+                self.layers.append(SelfAttention(in_channels=out_channels[2**(index)]))
         else:
-            self.layers.append(ResBlockG(in_channels=out_channels[2**(3+index)], out_channels=3,upsampling_mode=upsampling_mode))
+            self.layers.append(ResBlockG(in_channels=out_channels[2**(index)], out_channels=3,upsampling_mode=upsampling_mode))
+            self.layers.append(nn.Tanh())
         
     def forward(self,inputs):
         x = self.inputs(inputs)
@@ -88,42 +85,40 @@ class Generator(nn.Module):
             x = x.view(-1,self.n_dims,4,4)
         for layer in self.layers:
             x = layer(x)
-        return F.tanh(x)
+        return x
 
         
 class ResBlockD(nn.Module):
     def __init__(self,in_channels,out_channels,activation="leakyrelu",alpha=0.2,downsampling_mode="conv"):
         super().__init__()
         self.downsampling_mode = downsampling_mode
-        self.branched_layer = nn.Sequential(
+        self.main = nn.Sequential(
             get_activation(activation,alpha),
             sn_conv2d(in_channels=in_channels,out_channels=in_channels,kernel_size=(3,3),padding=1),
             get_activation(activation,alpha),
             sn_conv2d(in_channels=in_channels,out_channels=out_channels,kernel_size=(3,3),padding=1),
         )
-        self.main = nn.Sequential(
+        self.shutcut = nn.Sequential(
             get_activation(activation,alpha),
             sn_conv2d(in_channels=in_channels,out_channels=out_channels,kernel_size=(1,1))
         )
 
         if(downsampling_mode == "conv"):
             self.downsampling_main = sn_conv2d(in_channels=out_channels,out_channels=out_channels,kernel_size=(4,4),padding=1,stride=2)
-            self.downsampling_branched = sn_conv2d(in_channels=out_channels,out_channels=out_channels,kernel_size=(4,4),padding=1,stride=2)
+            self.downsampling_shutcut = sn_conv2d(in_channels=out_channels,out_channels=out_channels,kernel_size=(4,4),padding=1,stride=2)
     
     def forward(self,inputs):
-        branched = self.branched_layer(inputs)
-        x = self.main(inputs)
+        main = self.main(inputs)
+        shutcut = self.shutcut(inputs)
         if(self.downsampling_mode=="conv"):
-            output = self.downsampling_main(x)+self.downsampling_branched(branched)
+            output = self.downsampling_main(main)+self.downsampling_shutcut(shutcut)
         elif(self.downsampling_mode=="pooling"):
-            b,c,h,w = inputs.shape
-            output = F.adaptive_avg_pool2d(x, output_size=(h//2,w//2)) + F.adaptive_avg_pool2d(branched, output_size=(h//2,w//2))
-        else:
-            output = x + branched
+            _,_,h,w = inputs.shape
+            output = F.adaptive_avg_pool2d(main, output_size=(h//2,w//2)) + F.adaptive_avg_pool2d(shutcut, output_size=(h//2,w//2))
         return output
 
 class Discriminator(nn.Module):
-    def __init__(self,n_dims=512,max_resolutions=256,lr=1e-3,betas=(0,0.9),activation="leakyrelu",downsampling_mode="conv"):
+    def __init__(self,max_resolutions=256,activation="leakyrelu",downsampling_mode="conv",attention_loc=32):
         super().__init__()
         out_channels={
             4:1024,
@@ -138,22 +133,22 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList([ResBlockD(in_channels=3, out_channels=out_channels[max_resolutions],activation=activation,downsampling_mode=downsampling_mode)])
         for index in range(int(log2(max_resolutions))-4):
             self.layers.append(ResBlockD(in_channels=out_channels[max_resolutions//2**(index)], out_channels=out_channels[max_resolutions//2**(index+1)],activation=activation,downsampling_mode=downsampling_mode))
-            if(index == 0):
+            if((max_resolutions//2**(index+1))==attention_loc):
                 self.layers.append(SelfAttention(in_channels=out_channels[max_resolutions//2**(index+1)]))
         else:
-            self.layers.append(ResBlockD(in_channels=out_channels[max_resolutions//2**(index+1)], out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=downsampling_mode))
-            self.layers.append(MiniBatchStddev())
-            self.layers.append(ResBlockD(in_channels=out_channels[max_resolutions//2**(index+2)]+1, out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=None))
-            self.output_layer = sn_linear(in_features=out_channels[max_resolutions//2**(index+2)],out_features=1)
-
+            self.layers.extend([
+                ResBlockD(in_channels=out_channels[max_resolutions//2**(index+1)], out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=downsampling_mode),
+                MiniBatchStddev(),
+                ResBlockD(in_channels=out_channels[max_resolutions//2**(index+2)]+1, out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=None),
+                get_activation(activation),
+                GlobalSum(),
+                sn_linear(in_features=out_channels[max_resolutions//2**(index+2)],out_features=1)
+            ])
         
     def forward(self,inputs):
         x = inputs
         for layer in self.layers:
             x = layer(x)
-        x = F.leaky_relu(x,negative_slope=0.2)
-        x = torch.sum(x,dim=(-1,-2))
-        x = self.output_layer(x)
         return x
 
 class SAGAN(GAN):
@@ -170,21 +165,21 @@ class SAGAN(GAN):
             initial_layer="tconv",
             upsampling_mode="tconv",
             downsampling_mode="conv",
-            loss_fn = "hinge"
+            loss_fn = "hinge",
+            attention_loc=32
         ):
+        super().__init__()
         self.n_dis = n_dis
         self.initial_layer = initial_layer
         self.device = "cuda" if (torch.cuda.is_available()) else "cpu"
-        self.netD = Discriminator(n_dims,max_resolutions,lr=d_lr,betas=d_betas,downsampling_mode=downsampling_mode).to(self.device)
-        self.netG = Generator(n_dims,max_resolutions,lr=g_lr,betas=g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode).to(self.device)
+        self.netD = Discriminator(n_dims,max_resolutions,lr=d_lr,betas=d_betas,downsampling_mode=downsampling_mode,attention_loc=attention_loc).to(self.device)
+        self.netG = Generator(n_dims,max_resolutions,lr=g_lr,betas=g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode,attention_loc=attention_loc).to(self.device)
         self.n_dims = n_dims
         self.loss = loss_fn
         if(loss_fn=="hinge"):
             self.loss_fn = hinge
         elif(loss_fn=="wgangp"):
             self.loss_fn = Wgangp(self.netD,self.device)
-        self.total_steps = 0
-        self.total_epochs = 0
         self.is_da = is_da
         if(is_da):
             self.data_aug = DifferentAugmentation((max_resolutions,max_resolutions),30)
@@ -223,12 +218,20 @@ class SAGAN(GAN):
         self.optimizer_g.step()
         return loss
     
+    def generate(self):
+        if(self.initial_layer=="tconv"):
+            noise = torch.randn(size=(1,self.n_dims,1,1),device=self.device)
+        else:
+            noise = torch.randn(size=(1,self.n_dims),device=self.device)
+        with torch.no_grad():
+            img = torch.squeeze(self.netG(noise),dim=0)
+        return img
+
     def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True):
         if(is_tensorboard):
             log_writer = tensorboard.SummaryWriter(log_dir="./logs")
         loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size,shuffle=shuffle,num_workers=num_workers)
-        save_num = len(loader) // 100
-        self.total_steps = 86460
+        save_num = len(loader) // 10
         for epoch in tqdm(range(epochs),desc="Epochs",total=epochs+self.total_epochs,initial=self.total_epochs):
             for step,data in enumerate(tqdm(loader,desc="Steps",leave=False),start=1):
                 real_imgs,_ = data

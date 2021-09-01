@@ -8,6 +8,9 @@ from torch.nn import functional as F
 from math import log2
 from collections import deque
 import random
+import lpips
+from tqdm._tqdm_notebook import tqdm
+from torch.utils import tensorboard
 
 def crop(x,crop_loc):
     _,_,h,w = x.shape
@@ -206,14 +209,62 @@ class Discriminator(nn.Module):
     def forward(self,x,label="fake"):
         for layer in self.feat8:
             x = layer(x) 
-            if(label == "fake"and x.shape[-1] == 16):
+            if(label == "fake" and x.shape[-1] == 16):
                 self.crop_loc = random.randint(0,3)
                 x16 = crop(x,self.crop_loc)
         if(label == "fake"):
             recon_16 = self.simple_decoderx16(x16)
             recon_8 = self.simple_decoderx8(x)
-        else:
+        elif(label == "real"):
             recon_8 = F.interpolate(x,(self.recon_size,self.recon_size))
             recon_16 = F.interpolate(crop(x,self.crop_loc),(self.recon_size,self.recon_size)) 
+        else:
+            recon_16,recon_8 = None,None
         output = self.output_layer(x)
         return output,(recon_16,recon_8)
+
+class LightWeightGAN(GAN):
+    def __init__(
+        self,
+        n_dims,
+        n_dis,
+        max_resolution,
+        g_lr,
+        d_lr,
+        g_betas,
+        d_betas,
+        is_da,
+        recon_size=128):
+        super().__init__()
+        self.netD = Discriminator(max_resolution,recon_size=recon_size)
+        self.netG = Generator(n_dims,max_resolution)
+        self.optimizer_d = torch.optim.Adam(self.netD.parameters(),lr=d_lr,betas=d_betas)
+        self.optimizer_g = torch.optim.Adam(self.netG.parameters(),lr=g_lr,betas=g_betas)
+        self.adversarial_loss = hinge
+        self.recon_loss = lpips.LPIPS()
+        
+    def train_d(self,real_img,fake_img):
+        self.optimizer_d.zero_grad()
+        fake_output,fake_recon = self.netD(fake_img,label="fake")
+        real_output,real_recon = self.netD(real_img,label="real")
+        loss = hinge(real_output,fake_output)
+        loss += self.recon_loss(torch.cat(real_recon),torch.cat(fake_recon))
+        loss.backward()
+        self.optimizer_d.step()
+        
+    def train_g(self,fake_img):
+        self.optimizer_g.zero_grad()
+        fake_output,_ = self.netD(fake_img,label=None)
+        loss = torch.mean(fake_output)
+        loss.backward()
+        self.optimizer_g.step()
+
+
+
+            
+
+
+
+        
+        
+        

@@ -88,7 +88,7 @@ class GAN:
         self.total_epochs = trainer_state["total_epochs"]
         self.fixed_noise = trainer_state["fixed_noise"]
         
-def translation(self,inputs):
+def random_translation(inputs):
     b,_,h,w = inputs.shape
     y,x = torch.randint(-h//5,h//5,size=(b,1,1)),torch.randint(-w//5,w//5,size=(b,1,1))
     index_b,index_y,index_x = torch.meshgrid(
@@ -101,7 +101,7 @@ def translation(self,inputs):
     inputs = F.pad(inputs,[1,1,1,1,0,0,0,0]) # dim -1(left,right) dim -2(left, right) # dim -3(left, right) -4(left, right)
     return inputs.permute(0,2,3,1).contiguous()[index_b,index_y,index_x].permute(0,3,1,2).contiguous()
             
-def cutout(self,inputs):
+def random_cutout(inputs):
     b,_,h,w = inputs.shape 
     y,x= torch.randint(10,h//3,size=(1,)),torch.randint(10,w//3,size=(1,))
     index_b,index_y,index_x = torch.meshgrid(
@@ -115,26 +115,56 @@ def cutout(self,inputs):
     mask[index_b,index_y,index_x] *= 0
     return inputs * mask.unsqueeze(1)
 
+def random_saturation(inputs):
+    mean = torch.mean(inputs,dim=1,keepdim=True,dtype=inputs.dtype)
+    factor = torch.rand(size=(inputs.shape[0],1,1,1),dtype=inputs.dtype,device=inputs.device) * 2
+    return (inputs - mean) * factor + mean
+
+def random_brightness(inputs):
+    factor = torch.rand(size=(inputs.shape[0],1,1,1),dtype=inputs.dtype,device=inputs.device) / 4
+    return inputs + factor
+
+def random_contrast(inputs):
+    b,c,h,w = inputs.shape
+    mean = torch.mean(inputs,dim=(1,2,3),keepdim=True)
+    factor = torch.rand(size=(b,1,1,1),dtype=inputs.dtype,device=inputs.device) + 0.5
+    return (inputs - mean) * factor + mean
+
+
 class AdaptiveDA: 
-    def __init__(self,limit,frequency=4,threshold=0.6,const=0.05):
-        self.apply_p = 0
+    def __init__(self,frequency=4,threshold=0.6,const=0.05):
+        self._apply_p = 0
         self.threshold = threshold
         self.const = 0.05
-        self.limit = limit
         self.frequency = frequency
         self.n = 0
         self.total_n = 0
+        self.functions = [
+            random_brightness,
+            random_contrast,
+            random_saturation,
+            random_translation,
+            random_cutout
+        ]
         
-    def adjust_p(self,inputs):
-        rt = torch.sign(inputs).mean()
-        if(self.apply_p < 1 and rt>self.threshold):
-            self.apply_p += self.const 
-        if(self.apply_p > 0 and rt<self.sh):
-            self.apply_p -= self.const
+    def adjust_p(self,x):
+        rt = torch.sign(x).mean()
+        if(self._apply_p < 1 and rt>self.threshold):
+            self._apply_p += self.const 
+        if(self._apply_p > 0 and rt<self.sh):
+            self._apply_p -= self.const
 
-    def apply(self,inputs,target=True):
-        if(self.n == self.frequency and self.total_n < self.limit):
-            self.adjust_p(inputs)
+    def apply(self,x,target=False):
+        if(target and self.n == self.frequency):
+            self.adjust_p(x)
+        for function in self.functions:
+            if(np.random.choice([True,False],p=[self._apply_p,1-self._apply_p])):
+                print(function)
+                x = function(x)
+        return x
+            
+        
+            
             
         
 

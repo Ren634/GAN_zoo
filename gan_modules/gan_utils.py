@@ -88,6 +88,33 @@ class GAN:
         self.total_epochs = trainer_state["total_epochs"]
         self.fixed_noise = trainer_state["fixed_noise"]
         
+def translation(self,inputs):
+    b,_,h,w = inputs.shape
+    y,x = torch.randint(-h//5,h//5,size=(b,1,1)),torch.randint(-w//5,w//5,size=(b,1,1))
+    index_b,index_y,index_x = torch.meshgrid(
+        torch.arange(b,dtype=torch.long),
+        torch.arange(h,dtype=torch.long),
+        torch.arange(w,dtype=torch.long)
+    )
+    index_y = torch.clamp(index_y + y , min=0, max=h+1)
+    index_x = torch.clamp(index_x + x , min=0, max=w+1)
+    inputs = F.pad(inputs,[1,1,1,1,0,0,0,0]) # dim -1(left,right) dim -2(left, right) # dim -3(left, right) -4(left, right)
+    return inputs.permute(0,2,3,1).contiguous()[index_b,index_y,index_x].permute(0,3,1,2).contiguous()
+            
+def cutout(self,inputs):
+    b,_,h,w = inputs.shape 
+    y,x= torch.randint(10,h//3,size=(1,)),torch.randint(10,w//3,size=(1,))
+    index_b,index_y,index_x = torch.meshgrid(
+        torch.arange(b,dtype=torch.long),
+        torch.arange(y.item(),dtype=torch.long),
+        torch.arange(x.item(),dtype=torch.long)
+    )
+    index_y = torch.clamp(index_y + torch.randint(0,h-10,size=(b,1,1)),min=0,max=h-1)
+    index_x = torch.clamp(index_x + torch.randint(0,w-10,size=(b,1,1)),min=0,max=w-1)
+    mask = torch.ones((b,h,w),device=inputs.device,dtype=inputs.dtype)
+    mask[index_b,index_y,index_x] *= 0
+    return inputs * mask.unsqueeze(1)
+
 class AdaptiveDA: 
     def __init__(self,limit,frequency=4,threshold=0.6,const=0.05):
         self.apply_p = 0
@@ -108,20 +135,7 @@ class AdaptiveDA:
     def apply(self,inputs,target=True):
         if(self.n == self.frequency and self.total_n < self.limit):
             self.adjust_p(inputs)
-        
-    def cutout(self,inputs):
-        b,_,h,w = inputs.shape 
-        y,x= torch.randint(10,h//3,size=(1,)),torch.randint(10,w//3,size=(1,))
-        index_b,index_y,index_x = torch.meshgrid(
-            torch.arange(b,dtype=torch.long),
-            torch.arange(y.item(),dtype=torch.long),
-            torch.arange(x.item(),dtype=torch.long)
-        )
-        index_y = torch.clamp(index_y + torch.randint(0,h-10,size=(b,1,1)),min=0,max=h-1)
-        index_x = torch.clamp(index_x + torch.randint(0,w-10,size=(b,1,1)),min=0,max=w-1)
-        mask = torch.ones((b,h,w),device=inputs.device,dtype=inputs.dtype)
-        mask[index_b,index_y,index_x] *= 0
-        return inputs * mask.unsqueeze(1)
+            
         
 
         

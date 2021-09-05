@@ -14,7 +14,7 @@ device = "cuda" if torch.cuda.is_available else "cpu"
 def save_img(imgs,file_name,img_format="png",is_grid=True):
     today = datetime.date.today().strftime("%Y-%m-%d")
     if(is_grid):
-        imgs = torchvision.utils.make_grid(imgs,nrow=(len(imgs)//4),padding=10)
+        imgs = torchvision.utils.make_grid(imgs,nrow=(len(imgs)//4))
         file_path = f"./logs/imgs/{today}_{file_name}."+img_format
         os.makedirs("./logs/imgs",exist_ok=True) 
     else:
@@ -90,7 +90,7 @@ class GAN:
         
 def random_translation(inputs):
     b,_,h,w = inputs.shape
-    y,x = torch.randint(-h//5,h//5,size=(b,1,1)),torch.randint(-w//5,w//5,size=(b,1,1))
+    y,x = torch.randint(-h//8,h//8,size=(b,1,1)),torch.randint(-w//8,w//8,size=(b,1,1))
     index_b,index_y,index_x = torch.meshgrid(
         torch.arange(b,dtype=torch.long),
         torch.arange(h,dtype=torch.long),
@@ -130,37 +130,40 @@ def random_contrast(inputs):
     factor = torch.rand(size=(b,1,1,1),dtype=inputs.dtype,device=inputs.device) + 0.5
     return (inputs - mean) * factor + mean
 
-
 class AdaptiveDA: 
-    def __init__(self,frequency=4,threshold=0.6,const=0.05):
+    def __init__(self,net,frequency=4,threshold=0.6,const=0.01):
         self._apply_p = 0
         self.threshold = threshold
-        self.const = 0.05
+        self.const = const
         self.frequency = frequency
         self.n = 0
-        self.total_n = 0
         self.functions = [
             random_brightness,
             random_contrast,
             random_saturation,
             random_translation,
-            random_cutout
         ]
+        self.netD = net
+        self.rt = 0
         
     def adjust_p(self,x):
-        rt = torch.sign(x).mean()
-        if(self._apply_p < 1 and rt>self.threshold):
-            self._apply_p += self.const 
-        if(self._apply_p > 0 and rt<self.sh):
-            self._apply_p -= self.const
+        with torch.no_grad():
+            x = self.netD(x)
+        self.rt = torch.sign(x).mean().item()
+        if(self._apply_p < 1 and self.rt>self.threshold):
+            self._apply_p = min(self._apply_p + self.const,0.5)
+        if(self._apply_p > 0 and self.rt<self.threshold):
+            self._apply_p = max(self._apply_p - self.const,0)
 
     def apply(self,x,target=False):
-        if(target and self.n == self.frequency):
-            self.adjust_p(x)
-        for function in self.functions:
-            if(np.random.choice([True,False],p=[self._apply_p,1-self._apply_p])):
-                print(function)
-                x = function(x)
+        if(target):
+            self.n += 1
+            if(self.n == self.frequency):
+                self.adjust_p(x)
+                self.n = 0
+        if(np.random.choice([True,False],p=[self._apply_p,1-self._apply_p])):
+            for function in self.functions:
+                    x = function(x)
         return x
             
         

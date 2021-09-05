@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch._C import dtype
 from torch.nn import functional as F
 import torchvision
 import torchvision.transforms.functional as TF
@@ -8,10 +9,12 @@ import glob
 import os
 import random
 
+device = "cuda" if torch.cuda.is_available else "cpu"
+
 def save_img(imgs,file_name,img_format="png",is_grid=True):
     today = datetime.date.today().strftime("%Y-%m-%d")
     if(is_grid):
-        imgs = torchvision.utils.make_grid(imgs,nrow=(len(imgs)//4),padding=10)
+        imgs = torchvision.utils.make_grid(imgs,nrow=(len(imgs)//4))
         file_path = f"./logs/imgs/{today}_{file_name}."+img_format
         os.makedirs("./logs/imgs",exist_ok=True) 
     else:
@@ -85,83 +88,95 @@ class GAN:
         self.total_epochs = trainer_state["total_epochs"]
         self.fixed_noise = trainer_state["fixed_noise"]
         
-class DifferentAugmentation: 
-    def __init__(self,img_shape,trans_range=30,apply_p=0.85):
-        self.h ,self.w = img_shape
-        self.trans_range = trans_range
-        self.device = "cuda" if(torch.cuda.is_available()) else "cpu"
-        self.apply_p = apply_p
+def random_translation(inputs):
+    b,_,h,w = inputs.shape
+    y,x = torch.randint(-h//8,h//8,size=(b,1,1)),torch.randint(-w//8,w//8,size=(b,1,1))
+    index_b,index_y,index_x = torch.meshgrid(
+        torch.arange(b,dtype=torch.long),
+        torch.arange(h,dtype=torch.long),
+        torch.arange(w,dtype=torch.long)
+    )
+    index_y = torch.clamp(index_y + y , min=0, max=h+1)
+    index_x = torch.clamp(index_x + x , min=0, max=w+1)
+    inputs = F.pad(inputs,[1,1,1,1,0,0,0,0]) # dim -1(left,right) dim -2(left, right) # dim -3(left, right) -4(left, right)
+    return inputs.permute(0,2,3,1).contiguous()[index_b,index_y,index_x].permute(0,3,1,2).contiguous()
+            
+def random_cutout(inputs):
+    b,_,h,w = inputs.shape 
+    y,x= torch.randint(10,h//3,size=(1,)),torch.randint(10,w//3,size=(1,))
+    index_b,index_y,index_x = torch.meshgrid(
+        torch.arange(b,dtype=torch.long),
+        torch.arange(y.item(),dtype=torch.long),
+        torch.arange(x.item(),dtype=torch.long)
+    )
+    index_y = torch.clamp(index_y + torch.randint(0,h-10,size=(b,1,1)),min=0,max=h-1)
+    index_x = torch.clamp(index_x + torch.randint(0,w-10,size=(b,1,1)),min=0,max=w-1)
+    mask = torch.ones((b,h,w),device=inputs.device,dtype=inputs.dtype)
+    mask[index_b,index_y,index_x] *= 0
+    return inputs * mask.unsqueeze(1)
 
-    def apply(self,inputs,target=True):
+def random_saturation(inputs):
+    mean = torch.mean(inputs,dim=1,keepdim=True,dtype=inputs.dtype)
+    factor = torch.rand(size=(inputs.shape[0],1,1,1),dtype=inputs.dtype,device=inputs.device) * 2
+    return (inputs - mean) * factor + mean
+
+def random_brightness(inputs):
+    factor = torch.rand(size=(inputs.shape[0],1,1,1),dtype=inputs.dtype,device=inputs.device) / 4
+    return inputs + factor
+
+def random_contrast(inputs):
+    b,c,h,w = inputs.shape
+    mean = torch.mean(inputs,dim=(1,2,3),keepdim=True)
+    factor = torch.rand(size=(b,1,1,1),dtype=inputs.dtype,device=inputs.device) + 0.5
+    return (inputs - mean) * factor + mean
+
+class AdaptiveDA: 
+    def __init__(self,net,frequency=4,threshold=0.6,const=0.01):
+        self._apply_p = 0
+        self.threshold = threshold
+        self.const = const
+        self.frequency = frequency
+        self.n = 0
+        self.functions = [
+            random_brightness,
+            random_contrast,
+            random_saturation,
+            random_translation,
+        ]
+        self.netD = net
+        self.rt = 0
+        
+    def adjust_p(self,x):
+        with torch.no_grad():
+            x = self.netD(x)
+        self.rt = torch.sign(x).mean().item()
+        if(self._apply_p < 1 and self.rt>self.threshold):
+            self._apply_p = min(self._apply_p + self.const,0.5)
+        if(self._apply_p > 0 and self.rt<self.threshold):
+            self._apply_p = max(self._apply_p - self.const,0)
+
+    def apply(self,x,target=False):
         if(target):
-            self.method_num = np.random.choice(range(9),p=[self.apply_p]+[(1-self.apply_p)/8]*8)
-
-        if(self.method_num==0):
-            return inputs
-
-        elif(self.method_num==1):
-            if(target):
-                self.brightness_factor = random.uniform(1.1, 3)
-            applied = TF.adjust_brightness(inputs, brightness_factor=self.brightness_factor)
-
-        elif(self.method_num==2):
-            applied = TF.hflip(inputs)
-
-        elif(self.method_num==3):
-            applied = TF.vflip(inputs)
-
-        # TranslationX
-        elif(self.method_num==4):
-            if(target):
-                self.translate_x = [random.randint(-self.trans_range,self.trans_range),0]
-            applied = TF.affine(inputs, angle=0.0, translate=self.translate_x, scale=1.0, shear=0.0)
-            if(self.translate_x[0] < 0):
-                translate = -self.translate_x[0]
-                applied[:,:,:,self.w - translate:] = inputs[:,:,:,:translate]
-            elif(self.translate_x == 0):
-                applied = inputs
-            else:
-                applied[:,:,:,:self.translate_x[0]] = inputs[:,:,:,self.w - self.translate_x[0]:]
+            self.n += 1
+            if(self.n == self.frequency):
+                self.adjust_p(x)
+                self.n = 0
+        if(np.random.choice([True,False],p=[self._apply_p,1-self._apply_p])):
+            for function in self.functions:
+                    x = function(x)
+        return x
+            
         
-        # TranslationY
-        elif(self.method_num==5):
-            if(target):
-                self.translate_y = [0,random.randint(-self.trans_range,self.trans_range)]
-            applied = TF.affine(inputs, angle=0.0, translate=self.translate_y, scale=1.0, shear=0.0)
-            if(self.translate_y[1] < 0):
-                translate = -self.translate_y[1]
-                applied[:,:,self.h - translate:,:] = inputs[:,:,:translate,:]
-            elif(self.translate_y ==0):
-                applied = inputs
-            else:
-                applied[:,:,:self.translate_y[1],:] = inputs[:,:,self.h - self.translate_y[1]:,:]
+            
+            
+        
 
-        # CutOut
-        elif(self.method_num == 6):
-            if(target):
-                self.x = random.randint((self.w-1)//2 - 30,30+(self.w-1)//2)
-                self.y = random.randint((self.h-1)//2 - 30,30+(self.h-1)//2)
-                self.boxsize = random.randint(10,30)
-            applied = TF.erase(inputs, self.x, self.y, self.boxsize, self.boxsize, 0)
         
-        # change brightness along channels
-        elif(self.method_num==7):
-            if(target):
-                c = random.uniform(0,0.25)
-                self.channel_brightness_factor = torch.zeros(inputs.shape[1:],dtype=inputs.dtype).to(self.device)
-                self.channels = random.randint(0,2)
-                self.channel_brightness_factor[self.channels,:,:] += c
-            applied = inputs + self.channel_brightness_factor
-            if(not target):
-                del self.channel_brightness_factor
-                torch.cuda.empty_cache()
+
         
-        # add noise
-        elif(self.method_num ==8):
-            if(target):
-                self.noise = torch.randn(size=inputs.shape[1:]).to(self.device) / 10
-            applied = inputs + self.noise
-            if(not target):
-                del self.noise
-                torch.cuda.empty_cache()
-        return applied
+        
+
+        
+
+
+        

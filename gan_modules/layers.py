@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 from torch import nn
+from math import sqrt
 
 def sn_conv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
     layer = nn.utils.spectral_norm(
@@ -27,9 +28,65 @@ def sn_tconv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
+            bias=bias
             **kwargs)
         )
     return layer
+
+class EqualizedLRTConv2d(nn.Module):
+    def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+            **kwargs
+        )
+        nn.init.normal_(self.conv.weight,mean=0,std=1)
+        self.scale_factor = sqrt(2) / in_channels
+
+    def forward(self,inputs):
+        with torch.no_grad():
+            self.conv.weight = self.conv / self.scale_factor
+        output = self.conv(inputs)
+        return output
+
+class EqualizedLRConv2d(nn.Module):
+    def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+            **kwargs
+        )
+        nn.init.normal_(self.conv.weight,mean=0,std=1)
+        self.scale_factor = sqrt(2) / in_channels
+
+    def forward(self,inputs):
+        with torch.no_grad():
+            self.conv.weight = self.conv / self.scale_factor
+        output = self.conv(inputs)
+        return output  
+    
+class EqualizedLRLinear(nn.Module):
+    def __init__(self,in_features,out_features,bias=True,**kwargs):
+        super().__init__()
+        self.conv = nn.Linear(in_features=in_features,out_features=out_features,bias=bias)        
+        nn.init.normal_(self.conv.weight,mean=0,std=1)
+        self.scale_factor = sqrt(2) / in_features
+
+    def forward(self,inputs):
+        with torch.no_grad():
+            self.conv.weight = self.conv / self.scale_factor
+        output = self.conv(inputs)
+        return output
 
 class PixelNorm2d(nn.Module):
     def __init__(self,epsilon=1e-8):

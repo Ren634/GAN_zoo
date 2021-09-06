@@ -33,10 +33,9 @@ def sn_tconv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True
         )
     return layer
 
-class EqualizedLRTConv2d(nn.Module):
+class EqualizedLRTConv2d(nn.ConvTranspose2d):
     def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
-        super().__init__()
-        self.conv = nn.Conv2d(
+        super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -45,19 +44,26 @@ class EqualizedLRTConv2d(nn.Module):
             bias=bias,
             **kwargs
         )
-        nn.init.normal_(self.conv.weight,mean=0,std=1)
+        nn.init.normal_(self.weight,mean=0,std=1)
         self.scale_factor = sqrt(2) / in_channels
 
     def forward(self,inputs):
-        with torch.no_grad():
-            self.conv.weight = self.conv / self.scale_factor
-        output = self.conv(inputs)
+        self.weight.data = self.weight.data / self.scale_factor
+        output = F.conv_transpose2d(
+                inputs,
+                self.weight,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.output_padding,
+                self.groups,
+                self.dilation
+                )
         return output
 
-class EqualizedLRConv2d(nn.Module):
+class EqualizedLRConv2d(nn.Conv2d):
     def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
-        super().__init__()
-        self.conv = nn.Conv2d(
+        super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -65,27 +71,29 @@ class EqualizedLRConv2d(nn.Module):
             padding=padding,
             bias=bias,
             **kwargs
-        )
-        nn.init.normal_(self.conv.weight,mean=0,std=1)
+            ) 
+        nn.init.normal_(self.weight,mean=0,std=1)
         self.scale_factor = sqrt(2) / in_channels
 
     def forward(self,inputs):
-        with torch.no_grad():
-            self.conv.weight = self.conv / self.scale_factor
-        output = self.conv(inputs)
+        self.weight.data = self.weight.data / self.scale_factor
+        output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
         return output  
     
-class EqualizedLRLinear(nn.Module):
+class EqualizedLRLinear(nn.Linear):
     def __init__(self,in_features,out_features,bias=True,**kwargs):
-        super().__init__()
-        self.conv = nn.Linear(in_features=in_features,out_features=out_features,bias=bias)        
-        nn.init.normal_(self.conv.weight,mean=0,std=1)
+        super().__init__(
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias
+            **kwargs
+            )
+        nn.init.normal_(self.weight,mean=0,std=1)
         self.scale_factor = sqrt(2) / in_features
 
     def forward(self,inputs):
-        with torch.no_grad():
-            self.conv.weight = self.conv / self.scale_factor
-        output = self.conv(inputs)
+        self.weight.data = self.weight.data / self.scale_factor
+        output = F.linear(inputs,self.weight,self.bias)
         return output
 
 class PixelNorm2d(nn.Module):

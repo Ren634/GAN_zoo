@@ -51,42 +51,28 @@ class GAN:
     os.makedirs(f"./params",exist_ok=True)
 
     def save_model(self,save_path):
-        torch.save(
-            {
-                "model_state":self.netD.state_dict(),
-                "optim_state":self.optimizer_d.state_dict()
-            },
-            save_path+"_d.pt"
-            )
-        torch.save(
-            {
-                "model_state":self.netG.state_dict(),
-                "optim_state":self.optimizer_g.state_dict()
-            },
-            save_path+"_g.pt")
-        torch.save(
-            {
+        params = {
+                "model_state_d":self.netD.state_dict(),
+                "optim_state_d":self.optimizer_d.state_dict(),
+                "model_state_g":self.netG.state_dict(),
+                "optim_state_g":self.optimizer_g.state_dict(),
                 "total_epochs":self.total_epochs,
                 "total_steps":self.total_steps,
-                "fixed_noise":self.fixed_noise
-            },
-            save_path+"_trainer.pt"
-        )
+                "fixed_noise":self.fixed_noise, 
+        }
+        if(save_path[-3:] != ".pt"):
+            save_path = save_path + ".pt"
+        torch.save(params,save_path)
 
     def load_model(self,load_path):
-        load_path_d = load_path+"_d.pt"
-        load_path_g = load_path+"_g.pt"
-        load_path_trainer = load_path+"_trainer.pt"
-        param_d = torch.load(load_path_d)
-        param_g = torch.load(load_path_g)
-        trainer_state = torch.load(load_path_trainer)
-        self.netD.load_state_dict(param_d["model_state"])
-        self.netG.load_state_dict(param_g["model_state"])
-        self.optimizer_d.load_state_dict(param_d["optim_state"])
-        self.optimizer_g.load_state_dict(param_g["optim_state"])
-        self.total_steps = trainer_state["total_steps"]
-        self.total_epochs = trainer_state["total_epochs"]
-        self.fixed_noise = trainer_state["fixed_noise"]
+        params = torch.load(load_path)
+        self.netD.load_state_dict(params["model_state_d"])
+        self.netG.load_state_dict(params["model_state_g"])
+        self.optimizer_d.load_state_dict(params["optim_state_d"])
+        self.optimizer_g.load_state_dict(params["optim_state_g"])
+        self.total_steps = params["total_steps"]
+        self.total_epochs = params["total_epochs"]
+        self.fixed_noise = params["fixed_noise"]
         
 def random_translation(inputs):
     b,_,h,w = inputs.shape

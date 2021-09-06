@@ -42,6 +42,21 @@ class DataLoader(torch.utils.data.Dataset):
         img = TF.resize(img, size=self.resolutions)
         img = (img - 127.5)/127.5
         return img,label
+
+class EMA:
+    def __init__(self,threshold=0.995):
+        self.threshold = threshold
+        self.iter_counter = 0
+    
+    def setup(self,mvag_net):
+        for params in mvag_net.parameters():
+            params.requires_grad = False
+        
+    def apply(self,net,mvag_net):
+        beta = min(1-(1/(self.iter_counter+1)),self.threshold)
+        for params,mvag_params in zip(net.parameters(),mvag_net.parameters()):
+            mvag_params.data = mvag_params.data* beta + (1-beta)*params.data
+        self.iter_counter += 1
       
 class GAN:
 

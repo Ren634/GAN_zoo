@@ -1,9 +1,6 @@
 import numpy 
 import torch
 from torch import nn
-from torch.nn.modules import padding
-from torch.nn.modules.container import Sequential
-from torch.nn.modules.linear import Linear
 from gan_modules import *
 
 
@@ -25,6 +22,9 @@ class InputG(nn.Module):
             PixelNorm2d(),
             nn.LeakyReLU(negative_slope=negative_slope,inplace=True)
         )
+    def forward(self,inputs):
+        output = self.main(inputs)
+        return output
 
 class BlockG(nn.Module):
     def __init__(self,in_channels,out_channels,negative_slope=0.1,is_spectral_norm=True):
@@ -49,14 +49,21 @@ class BlockG(nn.Module):
 
 # need to get sample_size
 class RGBAdd(nn.Module):
-    def __init__(self,sample_size=1):
+    def __init__(self):
         super().__init__()
         self.alpha = 0
         self.sample_size = 1
         self.const = 1
         
-    def forward(self,RGB,old_RGB):
+    def forward(self,RGBs):
+        if(len(RGBs)==2):
+            RGB,old_RGB = RGBs
+        else:
+            return RGBs[0]
         output = (1 - self.alpha)*old_RGB + self.alpha * RGB
+        self.alpha += self.const
+        if(self.alpha>1):
+            self.alpha = 0
         return output
         
         
@@ -104,21 +111,30 @@ class Generator(nn.Module):
                 is_spectral_norm=self.is_spectral_norm
                 )
             )
-        self.to_RGB["old"] = self.to_RGB["up_to_date"]
         if(self.is_spectral_norm):
             Conv2d = sn_conv2d
+            ConvT2d = sn_tconv2d
         else:
             Conv2d = EqualizedLRConv2d
+            ConvT2d = EqualizedLRTConv2d
+        self.to_RGB["old"] = nn.Sequential(
+            ConvT2d(
+                in_channels=self.out_channels[self.img_size],
+                out_channels=self.out_channels[self.img_size],
+                kernel_size=(2,2),
+                stride=2),
+            self.to_RGB["up_to_date"])
         self.to_RGB["up_to_date"] = Conv2d(in_channels=self.out_channels[self.img_size*2],out_channels=3,kernel_size=(1,1))
         self.img_size *= 2
         
     def forward(self,x):
+        RGBs=[]
         for layer in self.main: 
             x = layer(x)
             if(self.img_size//2 == x.shape[-1]):
-                old_RGB = self.to_RGB["old"](x)
-        RGB = self.to_RGB["up_to_date"](x)
-        output = self.output_layer(RGB,old_RGB)
+                RGBs.append(self.to_RGB["old"](x))
+        RGBs.append(self.to_RGB["up_to_date"](x))
+        output = self.output_layer(RGBs)
         return output
         
         

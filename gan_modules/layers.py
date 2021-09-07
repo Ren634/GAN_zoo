@@ -45,7 +45,7 @@ class EqualizedLRTConv2d(nn.ConvTranspose2d):
             **kwargs
         )
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2) / in_channels
+        self.scale_factor = sqrt(2/in_channels)
 
     def forward(self,inputs):
         self.weight.data = self.weight.data / self.scale_factor
@@ -73,8 +73,8 @@ class EqualizedLRConv2d(nn.Conv2d):
             **kwargs
             ) 
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2) / in_channels
-
+        self.scale_factor = sqrt(2/in_channels)
+        
     def forward(self,inputs):
         self.weight.data = self.weight.data / self.scale_factor
         output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
@@ -85,11 +85,11 @@ class EqualizedLRLinear(nn.Linear):
         super().__init__(
             in_features=in_features,
             out_features=out_features,
-            bias=bias
+            bias=bias,
             **kwargs
             )
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2) / in_features
+        self.scale_factor = sqrt(2/in_features)
 
     def forward(self,inputs):
         self.weight.data = self.weight.data / self.scale_factor
@@ -109,13 +109,14 @@ class PixelNorm2d(nn.Module):
 class MiniBatchStddev(nn.Module):
     def __init__(self):
         super().__init__()
-        self.device = "cuda" if(torch.cuda.is_available()) else "cpu"
 
     def forward(self,inputs):
         b,_,h,w = inputs.shape
-        std = torch.std(inputs,unbiased=True,dim=0)
+        print(inputs)
+        std = torch.std(inputs,unbiased=False,dim=0)
+        print(std)
         v = torch.mean(std)
-        output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),device=self.device)),dim=1)
+        output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),dtype=inputs.dtype,device=inputs.device)),dim=1)
         return output
 
 class GlobalSum(nn.Module):

@@ -48,7 +48,7 @@ class EqualizedLRTConv2d(nn.ConvTranspose2d):
         self.scale_factor = sqrt(2/in_channels)
 
     def forward(self,inputs):
-        self.weight.data = self.weight.data / self.scale_factor
+        self.weight.data = self.weight.data * self.scale_factor
         output = F.conv_transpose2d(
                 inputs,
                 self.weight,
@@ -76,7 +76,7 @@ class EqualizedLRConv2d(nn.Conv2d):
         self.scale_factor = sqrt(2/in_channels)
         
     def forward(self,inputs):
-        self.weight.data = self.weight.data / self.scale_factor
+        self.weight.data = self.weight.data * self.scale_factor
         output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
         return output  
     
@@ -92,7 +92,7 @@ class EqualizedLRLinear(nn.Linear):
         self.scale_factor = sqrt(2/in_features)
 
     def forward(self,inputs):
-        self.weight.data = self.weight.data / self.scale_factor
+        self.weight.data = self.weight.data * self.scale_factor
         output = F.linear(inputs,self.weight,self.bias)
         return output
 
@@ -112,9 +112,7 @@ class MiniBatchStddev(nn.Module):
 
     def forward(self,inputs):
         b,_,h,w = inputs.shape
-        print(inputs)
         std = torch.std(inputs,unbiased=False,dim=0)
-        print(std)
         v = torch.mean(std)
         output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),dtype=inputs.dtype,device=inputs.device)),dim=1)
         return output

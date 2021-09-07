@@ -1,8 +1,8 @@
 import numpy 
 import torch
 from torch import nn
-from torch.nn.modules.container import Sequential
 from gan_modules import *
+from collections import deque
 
 
 class InputG(nn.Module):
@@ -135,7 +135,7 @@ class Generator(nn.Module):
         self.img_size *= 2
         
     def forward(self,x):
-        RGBs=[]
+        RGBs= []
         for layer in self.main: 
             x = layer(x)
             if(self.img_size//2 == x.shape[-1]):
@@ -192,8 +192,8 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(negative_slope=negative_slope,inplace=True)
             )
         })
-        self.main = nn.ModuleList([
-            nn.Sequential(
+        self.main = nn.ModuleList([])
+        self.output_layer = nn.Sequential(
             MiniBatchStddev(),
             Conv2d(in_channels=self.out_channels[4]+1,out_channels=self.out_channels[4],kernel_size=(3,3),padding=1),
             nn.LeakyReLU(negative_slope=negative_slope,inplace=True),
@@ -202,7 +202,6 @@ class Discriminator(nn.Module):
             nn.Flatten(),
             Linear(in_features=self.out_channels[4],out_features=1)
             )
-        ])
         self.add_fromRGB = RGBAdd(self.__sample_size)
     
     @property
@@ -233,16 +232,19 @@ class Discriminator(nn.Module):
                 ),
             nn.LeakyReLU(negative_slope=self.negative_slope,inplace=True)
         ) 
-        self.main.insert(0,[BlockD(in_channels=self.out_channels[self.img_size*2],out_channels=self.out_channels[self.img_size])])
+        self.main.insert(0,BlockD(in_channels=self.out_channels[self.img_size*2],out_channels=self.out_channels[self.img_size]))
         self.img_size *= 2
          
     def forward(self,x):
-        fromRGBs =  []
-        fromRGBs.append(self.fromRGB["up_to_date"](x))
-        if(len(self.fromRGB)>1):
-            fromRGBs.append(self.fromRGB["old"](x))
-        x = self.add_fromRGB(fromRGBs)
+        fromRGBs = []
+        up_to_date_RGB= self.fromRGB["up_to_date"](x)
         for layer in self.main:
-            x = layer(x)
-        return x
+            up_to_date_RGB = layer(up_to_date_RGB)
+            if(up_to_date_RGB.shape[-1]==self.img_size):
+                fromRGBs.append(up_to_date_RGB)
+                if(len(self.fromRGB)>1):
+                    fromRGBs.append(self.fromRGB["old"](x))
+                    up_to_date_RGB = self.add_fromRGB(fromRGBs)
+        output = self.output_layer(up_to_date_RGB) 
+        return output
             

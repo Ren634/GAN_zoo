@@ -1,4 +1,3 @@
-import numpy 
 import torch
 from torch import nn
 from gan_modules import *
@@ -64,12 +63,12 @@ class RGBAdd(nn.Module):
         if(self.alpha>1):
             self.alpha = 0
         return output
-        
-        
+ 
 class Generator(nn.Module):
     def __init__(self,n_dims,max_resolution,negative_slope=0.1,is_spectral_norm=True):
         super().__init__()
-        self.img_size = 4
+        self.img_size = torch.tensor(4)
+        self.register_buffer("image_size",self.img_size)
         self.max_resolution = max_resolution
         self.is_spectral_norm = is_spectral_norm
         self.negative_slope = negative_slope
@@ -113,10 +112,11 @@ class Generator(nn.Module):
         self.output_layer = nn.Sequential(RGBAdd(value),nn.Tanh())
         
     def update(self):
+        img_size = self.img_size.item()
         self.main.append(
             BlockG(
-                in_channels=self.out_channels[self.img_size],
-                out_channels=self.out_channels[self.img_size*2],
+                in_channels=self.out_channels[img_size],
+                out_channels=self.out_channels[img_size*2],
                 negative_slope=self.negative_slope,
                 is_spectral_norm=self.is_spectral_norm
                 )
@@ -131,7 +131,7 @@ class Generator(nn.Module):
         self.to_RGB["old"] = nn.Sequential(
             nn.Upsample(scale_factor=2,mode="nearest"),
             self.to_RGB["up_to_date"])
-        self.to_RGB["up_to_date"] = Conv2d(in_channels=self.out_channels[self.img_size*2],out_channels=3,kernel_size=(1,1))
+        self.to_RGB["up_to_date"] = Conv2d(in_channels=self.out_channels[img_size*2],out_channels=3,kernel_size=(1,1))
         self.img_size *= 2
         
     def forward(self,x):
@@ -172,7 +172,8 @@ class Discriminator(nn.Module):
             Conv2d = EqualizedLRConv2d 
             Linear = EqualizedLRLinear
         self.is_spectral_norm = is_spectral_norm
-        self.img_size = 4
+        self.img_size = torch.tensor(4)
+        self.register_buffer("image_size",self.img_size)
         self.negative_slope = negative_slope
         self.__sample_size = 1
         self.out_channels={
@@ -214,6 +215,7 @@ class Discriminator(nn.Module):
         self.add_fromRGB = RGBAdd(value)        
 
     def update(self):
+        img_size = self.img_size.item()
         if(self.is_spectral_norm):
             Conv2d = sn_conv2d
         else:
@@ -227,12 +229,12 @@ class Discriminator(nn.Module):
         self.fromRGB["up_to_date"] = nn.Sequential(
             Conv2d(
                 in_channels=3,
-                out_channels=self.out_channels[self.img_size*2],
+                out_channels=self.out_channels[img_size*2],
                 kernel_size=(1,1)
                 ),
             nn.LeakyReLU(negative_slope=self.negative_slope,inplace=True)
         ) 
-        self.main.insert(0,BlockD(in_channels=self.out_channels[self.img_size*2],out_channels=self.out_channels[self.img_size]))
+        self.main.insert(0,BlockD(in_channels=self.out_channels[img_size*2],out_channels=self.out_channels[img_size]))
         self.img_size *= 2
          
     def forward(self,x):
@@ -247,4 +249,23 @@ class Discriminator(nn.Module):
                     up_to_date_RGB = self.add_fromRGB(fromRGBs)
         output = self.output_layer(up_to_date_RGB) 
         return output
-            
+
+class PGGAN(GAN):
+    def __init__(
+        self,
+        n_dims,
+        max_resolution,
+        g_lr=0.01,
+        d_lr=0.01,
+        d_betas=(0,0.999),
+        g_betas=(0,0.999),
+        negative_slope=0.1,
+        is_spectral_norm=True
+        ):
+        super().__init__()            
+        self.netD = Discriminator(negative_slope=negative_slope,is_spectral_norm=is_spectral_norm)
+        self.netG = Generator(n_dims=n_dims,max_resolution=max_resolution,negative_slope=negative_slope,is_spectral_norm=is_spectral_norm)
+        self.optimizer_d = torch.optim.Adam(self.netD.parameters(),lr=d_lr,betas=d_betas)
+        self.optimizer_g = torch.optim.Adam(self.netG.parameters(),lr=g_lr,betas=g_betas)
+
+    

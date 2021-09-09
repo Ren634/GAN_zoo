@@ -48,7 +48,7 @@ class EqualizedLRTConv2d(nn.ConvTranspose2d):
         self.scale_factor = sqrt(2/in_channels)
 
     def forward(self,inputs):
-        self.weight.data = self.weight.data * self.scale_factor
+        inputs *= self.scale_factor
         output = F.conv_transpose2d(
                 inputs,
                 self.weight,
@@ -76,7 +76,7 @@ class EqualizedLRConv2d(nn.Conv2d):
         self.scale_factor = sqrt(2/in_channels)
         
     def forward(self,inputs):
-        self.weight.data = self.weight.data * self.scale_factor
+        inputs *= self.scale_factor
         output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
         return output  
     
@@ -92,7 +92,7 @@ class EqualizedLRLinear(nn.Linear):
         self.scale_factor = sqrt(2/in_features)
 
     def forward(self,inputs):
-        self.weight.data = self.weight.data * self.scale_factor
+        inputs *= self.scale_factor
         output = F.linear(inputs,self.weight,self.bias)
         return output
 
@@ -102,7 +102,7 @@ class PixelNorm2d(nn.Module):
         self.epsilon = epsilon
 
     def forward(self,inputs):
-        denominator = torch.mean(inputs**2,dim=0) + self.epsilon
+        denominator = torch.sqrt(torch.mean(inputs**2,dim=1) + self.epsilon)
         output = inputs / denominator
         return output
 

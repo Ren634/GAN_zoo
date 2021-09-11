@@ -5,7 +5,6 @@ from tqdm.notebook import tqdm
 from torchvision.transforms import functional as TF
 from torch.utils import tensorboard
 from math import log2
-from collections import deque
 
 device = "cuda" if torch.cuda.is_available else "cpu"
 
@@ -72,7 +71,7 @@ class RGBAdd(nn.Module):
 class Generator(nn.Module):
     def __init__(self,n_dims,max_resolution,negative_slope=0.1,is_spectral_norm=True):
         super().__init__()
-        self.img_size = torch.tensor(4.0)
+        self.img_size = torch.tensor(4)
         self.register_buffer("image_size",self.img_size)
         self.max_resolution = max_resolution
         self.is_spectral_norm = is_spectral_norm
@@ -264,16 +263,35 @@ class PGGAN(GAN):
         g_betas=(0,0.999),
         negative_slope=0.1,
         is_spectral_norm=True,
+        is_moving_average=True,
         loss ="wasserstein",
         ):
         super().__init__()            
         self.max_resolution = max_resolution
-        self.netD = Discriminator(negative_slope=negative_slope,is_spectral_norm=is_spectral_norm).to(device)
-        self.netG = Generator(n_dims=n_dims,max_resolution=max_resolution,negative_slope=negative_slope,is_spectral_norm=is_spectral_norm).to(device)
+        self.is_moving_average=is_moving_average
+        self.netD = Discriminator(
+            negative_slope=negative_slope,
+            is_spectral_norm=is_spectral_norm
+            ).to(device)
+        self.netG = Generator(
+            n_dims=n_dims,
+            max_resolution=max_resolution,
+            negative_slope=negative_slope,
+            is_spectral_norm=is_spectral_norm
+            ).to(device)
         self.optimizer_d = torch.optim.Adam(self.netD.parameters(),lr=d_lr,betas=d_betas)
         self.optimizer_g = torch.optim.Adam(self.netG.parameters(),lr=g_lr,betas=g_betas)
-        self.loss = WassersteinGP(self.netD) if loss =="wasserstein" else Hinge() 
-        
+        self.loss = WassersteinGP(self.netD) if loss =="wasserstein" else Hinge()
+        if(is_moving_average):
+            self.mvag_netG = self.netG(
+                n_dims=n_dims,
+                max_resolution=max_resolution,
+                negative_slope=negative_slope,
+                is_spectral_norm=is_spectral_norm
+                ).to(device)
+            self.ema = EMA()
+            self.ema.setup(self.mvag_netG)
+             
     def train_d(self,real_img,fake_img):
         self.optimizer_d.zero_grad()
         real = self.netD(real_img)
@@ -289,6 +307,8 @@ class PGGAN(GAN):
         loss = -torch.mean(fake)
         loss.backward()
         self.optimizer_g.step()
+        if(self.is_moving_average):
+            self.ema.apply(self.netG,self.mvag_netG)
         return loss
     
     def train(self,loader,epochs,img_size,save_num,is_tensorboard): 
@@ -314,23 +334,29 @@ class PGGAN(GAN):
                         global_step=self.total_steps
                         )                    
                 if(step % save_num == 0):
+                    if(self.is_moving_average):
+                        netG = self.mvag_netG
+                    else:
+                        netG = self.netG
                     with torch.no_grad():
-                        sample_img = (self.netG(self.fixed_noise).detach() + 1) / 2
+                        sample_img = (netG(self.fixed_noise).detach() + 1) / 2
                         sample_img = sample_img.to("cpu")
                     save_img(sample_img, file_name=f"size_{img_size}epoch{self.total_epochs}_step{step}")
                     for i in range(5):
                         check_vec = torch.randn(size=(1,self.n_dims,1,1),device=device)
                         with torch.no_grad():
-                            check_img = (torch.squeeze(self.netG(check_vec)).detach() + 1) / 2
+                            check_img = (torch.squeeze(netG(check_vec)).detach() + 1) / 2
                             check_img = check_img.to("cpu")
                         save_img(check_img, file_name=f"size_{img_size}epoch{self.total_epochs}_step{step}_check{i}",is_grid=False)
                     else:
                         del check_vec 
             self.total_epochs += 1
-            if((epoch+1) % 10 == 0):
+            if((epoch+1) % 2 == 0):
                 self.save_model(f"params\size{img_size}_epoch_{self.total_epochs-1}")
             self.netD.update()
             self.netG.update()
+            if(self.is_moving_average):
+                self.mvag_netG.update()
 
     def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True,image_num=10):
         if(is_tensorboard):
@@ -352,3 +378,24 @@ class PGGAN(GAN):
 
         if(is_tensorboard):
             self.log_writer.close()
+    
+    def save_model(self, save_path):
+        torch.save({"current_size": self.netG.img_size.item()},save_path+"_size.pt")
+        if(self.is_moving_average):
+            torch.save({"model_state_mvagg":self.mvag_netG.state_dict()},save_path+"_mvagg.pt")
+        super().save_model(save_path)
+
+    def load_model(self, load_path):
+        param = torch.load(load_path+"_size.pt")
+        current_size = param["current_size"]
+        begin,end = int(log2(self.netG.img_size.item())),int(log2(current_size))
+        for _ in range(begin,end):
+            self.netG.update()
+            self.netD.update()
+            if(self.is_moving_average):
+                self.mvag_netG.update() 
+        param = torch.load(load_path+"_mvagg.pt")
+        if(self.is_moving_average):
+            self.mvag_netG.load_state_dict(param["model_state_mvagg"])
+        super().load_model(load_path)
+        

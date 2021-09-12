@@ -6,7 +6,7 @@ import torchvision
 from different_augmentation import DifferentAugmentation
 import matplotlib.pyplot as plt
 # %%
-x = torchvision.io.read_image("a00102-0.jpg").to("cuda")
+x = torchvision.io.read_image("firefox_512x512.png").to("cuda")
 x = x.unsqueeze(0)/255.
 da = DifferentAugmentation(x.shape[2:],30)
 # %%

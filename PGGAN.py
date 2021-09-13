@@ -78,6 +78,7 @@ class RGBAdd(nn.Module):
         self.alpha += self.const
         if(self.alpha>1):
             self.alpha = 0
+        
         return output
  
 class Generator(nn.Module):
@@ -146,14 +147,14 @@ class Generator(nn.Module):
             self.to_RGB["up_to_date"]).to(device)
         self.to_RGB["up_to_date"] = Conv2d(in_channels=self.out_channels[img_size*2],out_channels=3,kernel_size=(1,1)).to(device)
         self.img_size *= 2
-        
+
     def forward(self,x):
         RGBs= []
         for layer in self.main: 
             x = layer(x)
             if(self.img_size.item()//2 == x.shape[-1]):
                 RGBs.append(self.to_RGB["old"](x))
-        RGBs.append(self.to_RGB["up_to_date"](x))
+        RGBs.insert(0,self.to_RGB["up_to_date"](x))
         output = self.output_layer(RGBs)
         return output
     
@@ -249,13 +250,13 @@ class Discriminator(nn.Module):
         ).to(device)
         self.main.insert(0,BlockD(in_channels=self.out_channels[img_size*2],out_channels=self.out_channels[img_size]).to(device))
         self.img_size *= 2
-         
+# alpha  in RGBAdd is increased at every calling forwad function
     def forward(self,x):
         fromRGBs = []
         up_to_date_RGB= self.fromRGB["up_to_date"](x)
         for layer in self.main:
             up_to_date_RGB = layer(up_to_date_RGB)
-            if(up_to_date_RGB.shape[-1]==self.img_size):
+            if(self.img_size.item()//2==up_to_date_RGB.shape[-1]):
                 fromRGBs.append(up_to_date_RGB)
                 if(len(self.fromRGB)>1):
                     fromRGBs.append(self.fromRGB["old"](x))
@@ -303,7 +304,7 @@ class PGGAN(GAN):
                 negative_slope=negative_slope,
                 is_spectral_norm=is_spectral_norm
                 ).to(device)
-            self.ema = EMA()
+            self.ema = EMA(weight_decay=0.999)
             self.ema.setup(self.mvag_netG)
              
     def train_d(self,real_img,fake_img):
@@ -311,6 +312,7 @@ class PGGAN(GAN):
         real = self.netD(real_img)
         fake = self.netD(fake_img)
         loss = self.loss(real,fake,real_img,fake_img)
+        loss += 0.001 * torch.square(real).mean()
         loss.backward()
         self.optimizer_d.step()
         return loss 
@@ -331,11 +333,9 @@ class PGGAN(GAN):
                 real_imgs,_ = data
                 real_imgs = TF.resize(real_imgs,size=img_size).to(device)
                 noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
-                with torch.no_grad():
-                    fake_imgs = self.netG(noise)
-                loss_d = self.train_d(real_imgs,fake_imgs).to("cpu")
-                noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
                 fake_imgs = self.netG(noise)
+                loss_d = self.train_d(real_imgs,fake_imgs.detach()).to("cpu")
+                noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
                 self.total_steps += 1 
                 if(self.total_steps % self.n_dis ==0):
                     loss_g = self.train_g(fake_imgs).to("cpu")
@@ -370,6 +370,7 @@ class PGGAN(GAN):
             self.total_epochs += 1
             if((epoch+1) % 2 == 0):
                 self.save_model(f"params\size{img_size}_epoch_{self.total_epochs-1}")
+        self.total_epochs = 0
         self.netD.update()
         self.netG.update()
         if(self.is_moving_average):
@@ -383,16 +384,20 @@ class PGGAN(GAN):
         begin = int(log2(current_size))
         end = int(log2(self.max_resolution)) 
         epochs,batch_size = listing(epochs,begin,end),listing(batch_size,begin,end)
-        for index,img_size in tqdm(enumerate(range_step_multiply(begin,end)),desc="Image size",total=self.max_resolution,initial=current_size):
-            loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size[index],shuffle=shuffle,num_workers=num_workers)
-            save_num = len(loader) // image_num
-            self.netG.sample_size = len(loader)
-            self.netD.sample_size = len(loader)
-            self.train(loader,epochs[index],img_size,save_num,is_tensorboard)
-            del loader 
-            
-        if(is_tensorboard):
-            self.log_writer.close()
+        with tqdm(initial=current_size,desc="Image size",total=self.max_resolution) as progress_bar:
+            for index,img_size in enumerate(range_step_multiply(begin,end)):
+                loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size[index],shuffle=shuffle,num_workers=num_workers)
+                save_num = len(loader) // image_num
+                sample_num = len(loader)*epochs[index]
+                self.netG.sample_size = sample_num
+                self.netD.sample_size = sample_num
+                self.mvag_netG.sample_size = sample_num
+                self.train(loader,epochs[index],img_size,save_num,is_tensorboard)
+                progress_bar.update(progress_bar.n)
+                del loader 
+                
+            if(is_tensorboard):
+                self.log_writer.close()
     
     def save_model(self, save_path):
         torch.save({"current_size": self.netG.img_size.item()},save_path+"_size.pt")

@@ -1,8 +1,7 @@
 import torch
 from torch import nn
-from gan_modules import *
+from gan_modules import * 
 from tqdm.notebook import tqdm
-from torchvision.transforms import functional as TF
 from torch.utils import tensorboard
 from math import log2
 
@@ -31,6 +30,7 @@ class InputG(nn.Module):
             ConvT2d = EqualizedLRTConv2d
             
         self.main = nn.Sequential(
+            PixelNorm2d(),
             ConvT2d(in_channels=in_channels,out_channels=out_channels,kernel_size=(4,4)),
             PixelNorm2d(),
             nn.LeakyReLU(negative_slope=negative_slope),
@@ -58,7 +58,7 @@ class BlockG(nn.Module):
             PixelNorm2d(),
             nn.LeakyReLU(negative_slope=negative_slope),
         )
-        
+    
     def forward(self,x):
         output = self.main(x)
         return output
@@ -75,16 +75,13 @@ class RGBAdd(nn.Module):
         else:
             return RGBs[0]
         output = (1 - self.alpha)*old_RGB + self.alpha * RGB
-        self.alpha += self.const
-        if(self.alpha>1):
-            self.alpha = 0
-        
-        return output
+        return output   
  
 class Generator(nn.Module):
     def __init__(self,n_dims,max_resolution,negative_slope=0.1,is_spectral_norm=True):
         super().__init__()
         self.img_size = torch.tensor(4)
+        self.register_buffer("image_size",self.img_size)
         self.max_resolution = max_resolution
         self.is_spectral_norm = is_spectral_norm
         self.negative_slope = negative_slope
@@ -145,8 +142,25 @@ class Generator(nn.Module):
         self.to_RGB["old"] = nn.Sequential(
             nn.Upsample(scale_factor=2,mode="nearest"),
             self.to_RGB["up_to_date"]).to(device)
+        
         self.to_RGB["up_to_date"] = Conv2d(in_channels=self.out_channels[img_size*2],out_channels=3,kernel_size=(1,1)).to(device)
         self.img_size *= 2
+        
+    def setup_optimizer(self,lr,betas):
+        self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
+    
+    def update_optimizer(self):
+            parameters = list(self.main[-1].parameters()) + list(self.to_RGB["up_to_date"].parameters())
+            self.optimizer.add_param_group({"params":parameters})
+
+    def AddRGB_update(self):
+        layer = self.output_layer[0]
+        layer.alpha += layer.const
+        layer.alpha = min(layer.alpha,1)
+
+    def AddRGB_reset(self):
+        layer = self.output_layer[0]
+        layer.alpha = 0 
 
     def forward(self,x):
         RGBs= []
@@ -228,7 +242,7 @@ class Discriminator(nn.Module):
         self.__sample_size = value
         self.add_fromRGB = RGBAdd(value)        
 
-    def update(self):
+    def update(self,optim):
         img_size = self.img_size.item()
         if(self.is_spectral_norm):
             Conv2d = sn_conv2d
@@ -248,9 +262,26 @@ class Discriminator(nn.Module):
                 ),
             nn.LeakyReLU(negative_slope=self.negative_slope)
         ).to(device)
+        optim.add_param_group({"params":self.fromRGB["up_to_date"][0].weight})
         self.main.insert(0,BlockD(in_channels=self.out_channels[img_size*2],out_channels=self.out_channels[img_size]).to(device))
         self.img_size *= 2
-# alpha  in RGBAdd is increased at every calling forwad function
+
+    def setup_optimizer(self,lr,betas):
+        self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
+
+    def update_optimizer(self):
+        parameters = list(self.main[0].parameters()) + list(self.fromRGB["up_to_date"].parameters())
+        self.optimizer.add_param_group({"params":parameters})
+
+    def AddRGB_update(self):
+        layer = self.add_fromRGB
+        layer.alpha += layer.const
+        layer.alpha = min(layer.alpha,1)
+            
+    def AddRGB_reset(self):
+        layer = self.add_fromRGB
+        layer.alpha = 0
+
     def forward(self,x):
         fromRGBs = []
         up_to_date_RGB= self.fromRGB["up_to_date"](x)
@@ -275,7 +306,7 @@ class PGGAN(GAN):
         d_betas=(0,0.999),
         g_betas=(0,0.999),
         negative_slope=0.1,
-        is_spectral_norm=True,
+        is_spectral_norm=False,
         is_moving_average=True,
         loss ="wasserstein",
         ):
@@ -294,8 +325,8 @@ class PGGAN(GAN):
             negative_slope=negative_slope,
             is_spectral_norm=is_spectral_norm
             ).to(device)
-        self.optimizer_d = torch.optim.Adam(self.netD.parameters(),lr=d_lr,betas=d_betas)
-        self.optimizer_g = torch.optim.Adam(self.netG.parameters(),lr=g_lr,betas=g_betas)
+        self.netD.setup_optimizer(lr=d_lr,betas=d_betas)
+        self.netG.setup_optimizer(lr=g_lr,betas=g_betas)
         self.loss = WassersteinGP(self.netD) if loss =="wasserstein" else Hinge()
         if(is_moving_average):
             self.mvag_netG = Generator(
@@ -315,6 +346,7 @@ class PGGAN(GAN):
         loss += 0.001 * torch.square(real).mean()
         loss.backward()
         self.optimizer_d.step()
+        self.netD.AddRGB_update()
         return loss 
     
     def train_g(self,fake_img):
@@ -323,19 +355,34 @@ class PGGAN(GAN):
         loss = -torch.mean(fake)
         loss.backward()
         self.optimizer_g.step()
+        self.netG.AddRGB_update()
         if(self.is_moving_average):
             self.ema.apply(self.netG,self.mvag_netG)
+            self.mvag_netG.AddRGB_update()
         return loss
     
+    def update_network(self):
+        self.netD.update()
+        self.netD.update_optimizer()
+        self.netG.update()
+        self.netG.update_optimizer()
+        self.netD.AddRGB_reset()
+        self.netG.AddRGB_reset()
+        if(self.is_moving_average):
+            self.mvag_netG.update()
+            self.mvag_netG.AddRGB_reset()
+
     def train(self,loader,epochs,img_size,save_num,is_tensorboard): 
         for epoch in tqdm(range(epochs),desc="Epochs",total=epochs+self.total_epochs,initial=self.total_epochs,leave=False):
             for step,data in enumerate(tqdm(loader,desc="Steps",leave=False),start=1):
                 real_imgs,_ = data
-                real_imgs = TF.resize(real_imgs,size=img_size).to(device)
+                real_imgs = real_imgs.to(device=device)
+                noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
+                with torch.no_grad():
+                    fake_imgs = self.netG(noise)
+                loss_d = self.train_d(real_imgs,fake_imgs).to("cpu")
                 noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
                 fake_imgs = self.netG(noise)
-                loss_d = self.train_d(real_imgs,fake_imgs.detach()).to("cpu")
-                noise = torch.randn(size=(real_imgs.shape[0],self.n_dims,1,1),device=device)
                 self.total_steps += 1 
                 if(self.total_steps % self.n_dis ==0):
                     loss_g = self.train_g(fake_imgs).to("cpu")
@@ -371,10 +418,8 @@ class PGGAN(GAN):
             if((epoch+1) % 2 == 0):
                 self.save_model(f"params\size{img_size}_epoch_{self.total_epochs-1}")
         self.total_epochs = 0
-        self.netD.update()
-        self.netG.update()
-        if(self.is_moving_average):
-            self.mvag_netG.update()
+        self.update_network()
+       
 
     def fit(self,dataset,epochs,batch_size,shuffle=True,num_workers=0,is_tensorboard=True,image_num=10):
         if(is_tensorboard):
@@ -384,11 +429,13 @@ class PGGAN(GAN):
         begin = int(log2(current_size))
         end = int(log2(self.max_resolution)) 
         epochs,batch_size = listing(epochs,begin,end),listing(batch_size,begin,end)
+        file_paths = dataset.file_paths
         with tqdm(initial=current_size,desc="Image size",total=self.max_resolution) as progress_bar:
             for index,img_size in enumerate(range_step_multiply(begin,end)):
+                dataset = DataLoader(file_paths,resolutions=img_size)
                 loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size[index],shuffle=shuffle,num_workers=num_workers)
                 save_num = len(loader) // image_num
-                sample_num = len(loader)*epochs[index]
+                sample_num = len(loader)*epochs[index] / 2
                 self.netG.sample_size = sample_num
                 self.netD.sample_size = sample_num
                 self.mvag_netG.sample_size = sample_num
@@ -398,6 +445,13 @@ class PGGAN(GAN):
                 
             if(is_tensorboard):
                 self.log_writer.close()
+
+    def generate(self,img_num=1):
+        net = self.mvag_netG if self.is_moving_average else self.netG
+        x = torch.randn(size=(img_num,self.n_dims,1,1))
+        with torch.no_grad():
+            output = (net(x) + 1) / 2
+        return output
     
     def save_model(self, save_path):
         torch.save({"current_size": self.netG.img_size.item()},save_path+"_size.pt")

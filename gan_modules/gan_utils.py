@@ -1,13 +1,11 @@
 import numpy as np
 import torch
-from torch._C import dtype
 from torch.nn import functional as F
 import torchvision
 import torchvision.transforms.functional as TF
 import datetime
 import glob
 import os
-import random
 
 device = "cuda" if torch.cuda.is_available else "cpu"
 
@@ -32,6 +30,7 @@ class DataLoader(torch.utils.data.Dataset):
             file_paths = path +"/*."+data_format
         self.resolutions = resolutions     
         self.file_names = glob.glob(file_paths,recursive=True)
+        self.file_paths = path
 
     def __len__(self):
         return len(self.file_names)
@@ -44,16 +43,24 @@ class DataLoader(torch.utils.data.Dataset):
         return img,label
 
 class EMA:
-    def __init__(self,threshold=0.995):
-        self.threshold = threshold
-        self.iter_counter = 0
+    def __init__(self,weight_decay=0.995):
+        self.weight_decay= weight_decay
+        self.__iter_counter = 0
     
     def setup(self,mvag_net):
         for params in mvag_net.parameters():
             params.requires_grad = False
-        
+
+    @property
+    def iter_counter(self):
+        return  self.__iter_counter
+
+    @iter_counter.setter
+    def iter_counter(self,values):
+        self.__iter_counter = values
+ 
     def apply(self,net,mvag_net):
-        beta = min(1-(1/(self.iter_counter+1)),self.threshold)
+        beta = min(1-(1/(self.__iter_counter+1)),self.weight_decay)
         for params,mvag_params in zip(net.parameters(),mvag_net.parameters()):
             mvag_params.data = mvag_params.data* beta + (1-beta)*params.data
         self.iter_counter += 1
@@ -80,7 +87,7 @@ class GAN:
         torch.save(params,save_path)
 
     def load_model(self,load_path):
-        params = torch.load(load_path)
+        params = torch.load(load_path+".pt")
         self.netD.load_state_dict(params["model_state_d"])
         self.netG.load_state_dict(params["model_state_g"])
         self.optimizer_d.load_state_dict(params["optim_state_d"])

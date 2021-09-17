@@ -1,8 +1,6 @@
-import numpy as np
 import torch
 from torch.nn import functional as F
 from torch import nn
-from math import sqrt
 
 def sn_conv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
     layer = nn.utils.spectral_norm(
@@ -45,7 +43,11 @@ class EqualizedLRTConv2d(nn.ConvTranspose2d):
             **kwargs
         )
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2/in_channels)
+        nn.init.constant_(self.bias,val=0.0)
+        if(not isinstance(kernel_size,tuple)):
+            kernel_size = (kernel_size,kernel_size)
+        f_in = torch.tensor([in_channels,*kernel_size])
+        self.scale_factor = torch.sqrt(2/torch.prod(f_in,dtype=self.weight.dtype))
 
     def forward(self,inputs):
         inputs *= self.scale_factor
@@ -73,10 +75,14 @@ class EqualizedLRConv2d(nn.Conv2d):
             **kwargs
             ) 
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2/in_channels)
+        nn.init.constant_(self.bias,val=0.0)
+        if(not isinstance(kernel_size,tuple)):
+            kernel_size = (kernel_size,kernel_size)
+        f_in = torch.prod(torch.tensor([in_channels,*kernel_size],dtype=self.weight.dtype,device=self.weight.device))
+        self.scale_factor = torch.sqrt(2/f_in)
         
     def forward(self,inputs):
-        inputs *= self.scale_factor
+        inputs = self.scale_factor *inputs
         output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
         return output  
     
@@ -89,10 +95,12 @@ class EqualizedLRLinear(nn.Linear):
             **kwargs
             )
         nn.init.normal_(self.weight,mean=0,std=1)
-        self.scale_factor = sqrt(2/in_features)
+        nn.init.constant_(self.bias,val=0.0)
+        f_in = torch.tensor(in_features,dtype=self.weight.dtype)
+        self.scale_factor = torch.sqrt(2/f_in)
 
     def forward(self,inputs):
-        inputs *= self.scale_factor
+        inputs = self.scale_factor * inputs
         output = F.linear(inputs,self.weight,self.bias)
         return output
 
@@ -102,7 +110,7 @@ class PixelNorm2d(nn.Module):
         self.epsilon = epsilon
 
     def forward(self,inputs):
-        denominator = torch.rsqrt(torch.mean(inputs**2,dim=1,dtype=inputs.dtype) + self.epsilon)
+        denominator = torch.rsqrt(torch.mean(inputs**2,dim=1,dtype=inputs.dtype,keepdim=True) + self.epsilon)
         output = inputs * denominator
         return output
 

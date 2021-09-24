@@ -19,6 +19,7 @@ def save_img(imgs,file_name,img_format="png",is_grid=True):
     else:
         file_path = f"./logs/check_imgs/{today}_{file_name}."+img_format
         os.makedirs("./logs/check_imgs",exist_ok=True)
+        imgs = imgs.squeeze(imgs)
     imgs = TF.to_pil_image(imgs)
     imgs.save(file_path)
 
@@ -71,7 +72,8 @@ class GAN:
     def __init__(self):
         self.total_epochs = 0
         self.total_steps = 0
-    os.makedirs(f"./params",exist_ok=True)
+        self.params = {}
+        os.makedirs(f"./params",exist_ok=True)
 
     def save_model(self,save_path):
         params = {
@@ -83,11 +85,14 @@ class GAN:
                 "total_steps":self.total_steps,
                 "fixed_noise":self.fixed_noise,
         }
+        self.params.update(params)
         if(save_path[-3:] != ".pt"):
             save_path = save_path + ".pt"
         torch.save(params,save_path)
 
     def load_model(self,load_path):
+        if(save_path[-3:] != ".pt"):
+            save_path = save_path + ".pt"
         params = torch.load(load_path+".pt")
         self.netD.load_state_dict(params["model_state_d"])
         self.netG.load_state_dict(params["model_state_g"])
@@ -175,7 +180,7 @@ class AdaptiveDA(nn.Module):
         self.prob += torch.sign(rt - self.threshold)*(self.epoch*self.batch_size)/(self.batch_size*1000)
         self.prob = torch.clamp(self.prob,min=0,max=1)
 
-    def apply(self,x,target=False):
+    def forward(self,x,target=False):
         if(target):
             self.n += 1
             if(self.n == self.frequency):

@@ -78,9 +78,9 @@ class GAN:
     def save_model(self,save_path):
         params = {
                 "model_state_d":self.netD.state_dict(),
-                "optim_state_d":self.optimizer_d.state_dict(),
+                "optim_state_d":self.netD.optimizer.state_dict(),
                 "model_state_g":self.netG.state_dict(),
-                "optim_state_g":self.optimizer_g.state_dict(),
+                "optim_state_g":self.netG.optimizer.state_dict(),
                 "total_epochs":self.total_epochs,
                 "total_steps":self.total_steps,
                 "fixed_noise":self.fixed_noise,
@@ -91,13 +91,13 @@ class GAN:
         torch.save(params,save_path)
 
     def load_model(self,load_path):
-        if(save_path[-3:] != ".pt"):
-            save_path = save_path + ".pt"
+        if(load_path[-3:] != ".pt"):
+            load_path = load_path + ".pt"
         params = torch.load(load_path+".pt")
         self.netD.load_state_dict(params["model_state_d"])
         self.netG.load_state_dict(params["model_state_g"])
-        self.optimizer_d.load_state_dict(params["optim_state_d"])
-        self.optimizer_g.load_state_dict(params["optim_state_g"])
+        self.netD.optimizer.load_state_dict(params["optim_state_d"])
+        self.netG.optimizer.load_state_dict(params["optim_state_g"])
         self.total_steps = params["total_steps"]
         self.total_epochs = params["total_epochs"]
         self.fixed_noise = params["fixed_noise"]

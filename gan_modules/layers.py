@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 from torch.nn import functional as F
 from torch import nn
@@ -27,9 +26,83 @@ def sn_tconv2d(in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
+            bias=bias
             **kwargs)
         )
     return layer
+
+class EqualizedLRTConv2d(nn.ConvTranspose2d):
+    def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+            **kwargs
+        )
+        nn.init.normal_(self.weight,mean=0,std=1)
+        nn.init.constant_(self.bias,val=0.0)
+        if(not isinstance(kernel_size,tuple)):
+            kernel_size = (kernel_size,kernel_size)
+        f_in = torch.tensor([in_channels,*kernel_size])
+        self.scale_factor = torch.sqrt(2/torch.prod(f_in,dtype=self.weight.dtype))
+
+    def forward(self,inputs):
+        inputs *= self.scale_factor
+        output = F.conv_transpose2d(
+                inputs,
+                self.weight,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.output_padding,
+                self.groups,
+                self.dilation
+                )
+        return output
+
+class EqualizedLRConv2d(nn.Conv2d):
+    def __init__(self,in_channels,out_channels,kernel_size,stride=1,padding=0,bias=True,**kwargs):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=bias,
+            **kwargs
+            ) 
+        nn.init.normal_(self.weight,mean=0,std=1)
+        nn.init.constant_(self.bias,val=0.0)
+        if(not isinstance(kernel_size,tuple)):
+            kernel_size = (kernel_size,kernel_size)
+        f_in = torch.prod(torch.tensor([in_channels,*kernel_size],dtype=self.weight.dtype,device=self.weight.device))
+        self.scale_factor = torch.sqrt(2/f_in)
+        
+    def forward(self,inputs):
+        inputs = self.scale_factor *inputs
+        output = F.conv2d(inputs,self.weight,self.bias,self.stride,self.padding,self.dilation,self.groups)
+        return output  
+    
+class EqualizedLRLinear(nn.Linear):
+    def __init__(self,in_features,out_features,bias=True,**kwargs):
+        super().__init__(
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            **kwargs
+            )
+        nn.init.normal_(self.weight,mean=0,std=1)
+        nn.init.constant_(self.bias,val=0.0)
+        f_in = torch.tensor(in_features,dtype=self.weight.dtype)
+        self.scale_factor = torch.sqrt(2/f_in)
+
+    def forward(self,inputs):
+        inputs = self.scale_factor * inputs
+        output = F.linear(inputs,self.weight,self.bias)
+        return output
 
 class PixelNorm2d(nn.Module):
     def __init__(self,epsilon=1e-8):
@@ -37,20 +110,19 @@ class PixelNorm2d(nn.Module):
         self.epsilon = epsilon
 
     def forward(self,inputs):
-        denominator = torch.mean(inputs**2,dim=0) + self.epsilon
-        output = inputs / denominator
+        denominator = torch.rsqrt(torch.mean(inputs**2,dim=1,dtype=inputs.dtype,keepdim=True) + self.epsilon)
+        output = inputs * denominator
         return output
 
 class MiniBatchStddev(nn.Module):
     def __init__(self):
         super().__init__()
-        self.device = "cuda" if(torch.cuda.is_available()) else "cpu"
 
     def forward(self,inputs):
         b,_,h,w = inputs.shape
-        std = torch.std(inputs,unbiased=True,dim=0)
+        std = torch.std(inputs,unbiased=False,dim=0)
         v = torch.mean(std)
-        output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),device=self.device)),dim=1)
+        output = torch.cat((inputs,torch.full(size=(b,1,h,w),fill_value=v.item(),dtype=inputs.dtype,device=inputs.device)),dim=1)
         return output
 
 class GlobalSum(nn.Module):

@@ -1,13 +1,12 @@
 import numpy as np
 import torch
-from torch._C import dtype
 from torch.nn import functional as F
+from torch import nn
 import torchvision
 import torchvision.transforms.functional as TF
 import datetime
 import glob
 import os
-import random
 
 device = "cuda" if torch.cuda.is_available else "cpu"
 
@@ -16,10 +15,11 @@ def save_img(imgs,file_name,img_format="png",is_grid=True):
     if(is_grid):
         imgs = torchvision.utils.make_grid(imgs,nrow=(len(imgs)//4))
         file_path = f"./logs/imgs/{today}_{file_name}."+img_format
-        os.makedirs("./logs/imgs",exist_ok=True) 
+        os.makedirs("./logs/imgs",exist_ok=True)
     else:
         file_path = f"./logs/check_imgs/{today}_{file_name}."+img_format
         os.makedirs("./logs/check_imgs",exist_ok=True)
+        imgs = imgs.squeeze(imgs)
     imgs = TF.to_pil_image(imgs)
     imgs.save(file_path)
 
@@ -30,8 +30,9 @@ class DataLoader(torch.utils.data.Dataset):
             file_paths = path +"*."+data_format
         else:
             file_paths = path +"/*."+data_format
-        self.resolutions = resolutions     
+        self.resolutions = resolutions
         self.file_names = glob.glob(file_paths,recursive=True)
+        self.file_paths = path
 
     def __len__(self):
         return len(self.file_names)
@@ -42,52 +43,65 @@ class DataLoader(torch.utils.data.Dataset):
         img = TF.resize(img, size=self.resolutions)
         img = (img - 127.5)/127.5
         return img,label
-      
+
+class EMA:
+    def __init__(self,weight_decay=0.995):
+        self.weight_decay= weight_decay
+        self.__iter_counter = 0
+
+    def setup(self,mvag_net):
+        for params in mvag_net.parameters():
+            params.requires_grad = False
+
+    @property
+    def iter_counter(self):
+        return  self.__iter_counter
+
+    @iter_counter.setter
+    def iter_counter(self,values):
+        self.__iter_counter = values
+
+    def apply(self,net,mvag_net):
+        beta = min(1-(1/(self.__iter_counter+1)),self.weight_decay)
+        for params,mvag_params in zip(net.parameters(),mvag_net.parameters()):
+            mvag_params.data = mvag_params.data* beta + (1-beta)*params.data
+        self.iter_counter += 1
+
 class GAN:
 
     def __init__(self):
         self.total_epochs = 0
         self.total_steps = 0
-    os.makedirs(f"./params",exist_ok=True)
+        self.params = {}
+        os.makedirs(f"./params",exist_ok=True)
 
     def save_model(self,save_path):
-        torch.save(
-            {
-                "model_state":self.netD.state_dict(),
-                "optim_state":self.optimizer_d.state_dict()
-            },
-            save_path+"_d.pt"
-            )
-        torch.save(
-            {
-                "model_state":self.netG.state_dict(),
-                "optim_state":self.optimizer_g.state_dict()
-            },
-            save_path+"_g.pt")
-        torch.save(
-            {
+        params = {
+                "model_state_d":self.netD.state_dict(),
+                "optim_state_d":self.netD.optimizer.state_dict(),
+                "model_state_g":self.netG.state_dict(),
+                "optim_state_g":self.netG.optimizer.state_dict(),
                 "total_epochs":self.total_epochs,
                 "total_steps":self.total_steps,
-                "fixed_noise":self.fixed_noise
-            },
-            save_path+"_trainer.pt"
-        )
+                "fixed_noise":self.fixed_noise,
+        }
+        self.params.update(params)
+        if(save_path[-3:] != ".pt"):
+            save_path = save_path + ".pt"
+        torch.save(params,save_path)
 
     def load_model(self,load_path):
-        load_path_d = load_path+"_d.pt"
-        load_path_g = load_path+"_g.pt"
-        load_path_trainer = load_path+"_trainer.pt"
-        param_d = torch.load(load_path_d)
-        param_g = torch.load(load_path_g)
-        trainer_state = torch.load(load_path_trainer)
-        self.netD.load_state_dict(param_d["model_state"])
-        self.netG.load_state_dict(param_g["model_state"])
-        self.optimizer_d.load_state_dict(param_d["optim_state"])
-        self.optimizer_g.load_state_dict(param_g["optim_state"])
-        self.total_steps = trainer_state["total_steps"]
-        self.total_epochs = trainer_state["total_epochs"]
-        self.fixed_noise = trainer_state["fixed_noise"]
-        
+        if(load_path[-3:] != ".pt"):
+            load_path = load_path + ".pt"
+        params = torch.load(load_path+".pt")
+        self.netD.load_state_dict(params["model_state_d"])
+        self.netG.load_state_dict(params["model_state_g"])
+        self.netD.optimizer.load_state_dict(params["optim_state_d"])
+        self.netG.optimizer.load_state_dict(params["optim_state_g"])
+        self.total_steps = params["total_steps"]
+        self.total_epochs = params["total_epochs"]
+        self.fixed_noise = params["fixed_noise"]
+
 def random_translation(inputs):
     b,_,h,w = inputs.shape
     y,x = torch.randint(-h//8,h//8,size=(b,1,1)),torch.randint(-w//8,w//8,size=(b,1,1))
@@ -100,9 +114,9 @@ def random_translation(inputs):
     index_x = torch.clamp(index_x + x , min=0, max=w+1)
     inputs = F.pad(inputs,[1,1,1,1,0,0,0,0]) # dim -1(left,right) dim -2(left, right) # dim -3(left, right) -4(left, right)
     return inputs.permute(0,2,3,1).contiguous()[index_b,index_y,index_x].permute(0,3,1,2).contiguous()
-            
+
 def random_cutout(inputs):
-    b,_,h,w = inputs.shape 
+    b,_,h,w = inputs.shape
     y,x= torch.randint(10,h//3,size=(1,)),torch.randint(10,w//3,size=(1,))
     index_b,index_y,index_x = torch.meshgrid(
         torch.arange(b,dtype=torch.long),
@@ -130,53 +144,51 @@ def random_contrast(inputs):
     factor = torch.rand(size=(b,1,1,1),dtype=inputs.dtype,device=inputs.device) + 0.5
     return (inputs - mean) * factor + mean
 
-class AdaptiveDA: 
-    def __init__(self,net,frequency=4,threshold=0.6,const=0.01):
-        self._apply_p = 0
-        self.threshold = threshold
-        self.const = const
-        self.frequency = frequency
-        self.n = 0
+class AdaptiveDA(nn.Module):
+    def __init__(self,frequency=4,threshold=0.6):
+        self.prob = torch.tensor(0)
+        self.threshold = torch.tensor(threshold)
+        self.frequency = torch.tensor(frequency)
+        self.n = torch.tensor(0)
         self.functions = [
             random_brightness,
             random_contrast,
             random_saturation,
             random_translation,
         ]
-        self.netD = net
-        self.rt = 0
-        
-    def adjust_p(self,x):
-        with torch.no_grad():
-            x = self.netD(x)
-        self.rt = torch.sign(x).mean().item()
-        if(self._apply_p < 1 and self.rt>self.threshold):
-            self._apply_p = min(self._apply_p + self.const,0.5)
-        if(self._apply_p > 0 and self.rt<self.threshold):
-            self._apply_p = max(self._apply_p - self.const,0)
+        self._epoch = 0
+        self._batch_size = 0
 
-    def apply(self,x,target=False):
+    @property
+    def batch_size(self):
+        return self._batch_size
+
+    @batch_size.setter
+    def batch_size(self,value):
+        self._batch_size = value
+
+    @property
+    def epoch(self):
+        return self._epoch
+
+    @epoch.setter
+    def epoch(self,value):
+        self._epoch = value
+
+    def adjust_p(self,real_logit):
+        rt = torch.sign(real_logit).mean()
+        self.prob += torch.sign(rt - self.threshold)*(self.epoch*self.batch_size)/(self.batch_size*1000)
+        self.prob = torch.clamp(self.prob,min=0,max=1)
+
+    def forward(self,x,target=False):
         if(target):
             self.n += 1
             if(self.n == self.frequency):
                 self.adjust_p(x)
                 self.n = 0
-        if(np.random.choice([True,False],p=[self._apply_p,1-self._apply_p])):
-            for function in self.functions:
-                    x = function(x)
+        prob = self.prob.item()
+        is_applying_list = np.random.choice(2,size=len(self.functions),p=[prob,1-prob])
+        for function,is_applying in enumerate(self.functions,is_applying_list):
+            if(is_applying):
+                x = function(x)
         return x
-            
-        
-            
-            
-        
-
-        
-
-        
-        
-
-        
-
-
-        

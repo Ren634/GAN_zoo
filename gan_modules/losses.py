@@ -1,27 +1,49 @@
-import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+import numpy as np
 
-def hinge(dx,dgx):
-    output = F.relu(1-dx).mean() + F.relu(1+dgx).mean()
-    return output
-
-
-class Wgangp(nn.Module):
-    def __init__(self,netD,device,gradient_weights=10,gamma=1.0):
+def hinge(real,fake):
+    output = F.relu(1-real).mean() + F.relu(1+fake).mean()
+    return output 
+    
+class Hinge(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.netD = netD
-        self.device = device
-        self.gradient_weights = gradient_weights
-        self.gamma = gamma
-        self.epsilon_diff = 0.001
 
-    def forward(self,real_img,fake_img,dx,dgx):
-        b,_,_,_ = dx.shape
-        epsilon = torch.rand(size=(b,1,1,1),device=self.device)
-        alpha = torch.autograd.Variable(epsilon * real_img +(1-epsilon)*fake_img,requires_grad=True)
-        output = self.netD(alpha)
-        gradients = torch.autograd.grad(outputs=output,inputs=alpha,grad_outputs=torch.ones_like(output),retain_graph=True,create_graph=True,only_inputs=True)[0]
-        penalty = torch.mean(torch.square(torch.linalg.matrix_norm(gradients,dim=(2,1))-self.gamma)/self.gamma)
-        return dx.mean()-dgx.mean()+ penalty * self.gradient_weights + self.epsilon_diff * torch.mean(dx)**2
+    def forward(self,real,fake,*imgs):
+        return hinge(real,fake)
+
+class WassersteinGP(nn.Module):
+    def __init__(self,net,penalty_coef=10):
+        super().__init__()
+        self.penalty_coef = penalty_coef
+        self.net = net
+
+    def forward(self,real,fake,*imgs):
+        real_img,fake_img = imgs
+        batch_size = real.shape[0]
+        coef = torch.tensor(
+            np.random.uniform(size=(batch_size,1,1,1)),
+            requires_grad=True,
+            device=real.device,
+            dtype=real.dtype
+            )
+        penalty_input = real_img * coef + (1 - coef)*fake_img
+        penalty_output = self.net(penalty_input)
+        gradient = torch.autograd.grad(
+            penalty_output,
+            penalty_input,
+            grad_outputs=torch.ones_like(penalty_output),
+            create_graph=True,
+            retain_graph=True
+            )[0]
+        penalty = gradient.view(batch_size,-1)
+        penalty = torch.square(torch.norm(gradient,dim=1)-1)
+        output = fake.mean() - real.mean() + self.penalty_coef * penalty.mean()
+        return output
+
+        
+
+
+        

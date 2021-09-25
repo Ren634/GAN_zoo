@@ -201,11 +201,11 @@ class SAGAN(GAN):
         self.netG.optimizer.step()
         return loss
     
-    def generate(self,image_num=1):
+    def generate(self,img_num=1):
         if(self.initial_layer=="tconv"):
-            noise = torch.randn(size=(image_num,self.n_dims,1,1),device=self.device)
+            noise = torch.randn(size=(img_num,self.n_dims,1,1),device=self.device)
         else:
-            noise = torch.randn(size=(image_num,self.n_dims),device=self.device)
+            noise = torch.randn(size=(img_num,self.n_dims),device=self.device)
         with torch.no_grad():
             img = (self.netG(noise) +1)/2
         return img

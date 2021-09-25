@@ -27,12 +27,12 @@ dataset = DataLoader("path of your data set folder",resolution=128) #resolution 
 
 #学習
 #is_tensorboard -> tensorboardを使用するかどうか 
-#image_num -> 1epoch中に何枚の生成画像を出力するか
-sagan.fit(dataset,epochs=30,batch_size=32,is_tensorboard=True,image_num=10)
+#img_num -> 1epoch中に何枚の生成画像を出力するか
+sagan.fit(dataset,epochs=30,batch_size=32,is_tensorboard=True,img_num=10)
 
 #画像生成
-generated_image = sagan.generate(image_num=16) 
-#return torch tensor (generated_image.shape->(image_num,3,max_resolutions,max_resolutions))
+generated_image = sagan.generate(img_num=16) 
+#return torch tensor (generated_image.shape->(img_num,3,max_resolutions,max_resolutions))
 
 ```
 
@@ -59,7 +59,7 @@ dataset = DataLoader("path of your data set folder",resolutions=256) #resolution
 
 #学習
 #is_tensorboard -> tensorboardを使用するかどうか 
-#image_num -> 1epoch中に何枚の生成画像を出力するか
+#img_num -> 1epoch中に何枚の生成画像を出力するか
 #epochs,batch_size -> int型が渡された場合，すべての解像度で同じ値を使用します
 #またlist型のオブジェクトを渡すことで各解像度ごとに値を設定できます
 #この際，最大解像度に至るまでの解像度の段階とlistの長さが一致しない場合，それ以降はリストの最後の要素を使用します
@@ -68,8 +68,8 @@ dataset = DataLoader("path of your data set folder",resolutions=256) #resolution
 pggan.fit(dataset,epochs=[1,2,3,4,5,6,7],batch_size=[2,3,5,7,11,13,17],is_tensorboad=False,image_num=100) #list型を渡した場合
 
 #画像生成
-generated_image = pggan.generate(image_num=16) 
-#return torch tensor (generated_image.shape->(image_num,3,max_resolutions,max_resolutions))
+generated_image = pggan.generate(img_num=16) 
+#return torch tensor (generated_image.shape->(img_num,3,max_resolutions,max_resolutions))
 ```
 ### LightWeight GAN
 Under development

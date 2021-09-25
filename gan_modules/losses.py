@@ -15,24 +15,32 @@ class Hinge(nn.Module):
         return hinge(real,fake)
 
 class WassersteinGP(nn.Module):
-    def __init__(self,net,penalty_coeff=10):
+    def __init__(self,net,penalty_coef=10):
         super().__init__()
-        self.penalty_coeff = penalty_coeff
+        self.penalty_coef = penalty_coef
         self.net = net
 
     def forward(self,real,fake,*imgs):
-        real_img,fake_img = [img.clone() for img in imgs]
-        coeff = torch.tensor(
-            np.random.uniform(size=(real.shape[0],1,1,1)),
+        real_img,fake_img = imgs
+        batch_size = real.shape[0]
+        coef = torch.tensor(
+            np.random.uniform(size=(batch_size,1,1,1)),
             requires_grad=True,
             device=real.device,
             dtype=real.dtype
             )
-        penalty_input = fake_img * coeff + (1 - coeff)*real_img
+        penalty_input = real_img * coef + (1 - coef)*fake_img
         penalty_output = self.net(penalty_input)
-        gradient = torch.autograd.grad(penalty_output,penalty_input,create_graph=True)[0]
+        gradient = torch.autograd.grad(
+            penalty_output,
+            penalty_input,
+            grad_outputs=torch.ones_like(penalty_output),
+            create_graph=True,
+            retain_graph=True
+            )[0]
+        penalty = gradient.view(batch_size,-1)
         penalty = torch.square(torch.norm(gradient,dim=1)-1)
-        output = fake.mean() - real.mean() + self.penalty_coeff * penalty.mean()
+        output = fake.mean() - real.mean() + self.penalty_coef * penalty.mean()
         return output
 
         

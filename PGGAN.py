@@ -73,8 +73,8 @@ class RGBAdd(nn.Module):
         super().__init__()
         self.alpha = torch.tensor(0.)
         self.const = torch.tensor(1 / sample_size)
-        self.register_buffer("alpha",self.alpha)
-        self.register_buffer("const",self.const)
+        self.register_buffer("coef",self.alpha)
+        self.register_buffer("additional factor",self.const)
         
     def forward(self,RGBs):
         if(len(RGBs)==2):
@@ -164,7 +164,7 @@ class Generator(nn.Module):
     def AddRGB_update(self):
         layer = self.output_layer
         layer.alpha += layer.const.data
-        layer.alpha.data = min(layer.alpha.data,1)
+        layer.alpha.data = min(layer.alpha.data,torch.tensor(1.).data)
 
     def AddRGB_reset(self):
         self.output_layer.alpha.data = torch.tensor(0.)
@@ -283,7 +283,7 @@ class Discriminator(nn.Module):
     def AddRGB_update(self):
         layer = self.add_fromRGB
         layer.alpha += layer.const
-        layer.alpha.data = min(layer.alpha.data,1)
+        layer.alpha.data = min(layer.alpha.data,torch.tensor(1.).data)
             
     def AddRGB_reset(self):
         self.add_fromRGB.alpha = torch.tensor(0.)

@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-import warnings # to hide Named tensors warnings when uses max_pooling. This is bug in pytorch https://github.com/pytorch/pytorch/issues/54846
+import warnings # to hide Named tensors warnings when uses max_pooling. This is a bug in pytorch https://github.com/pytorch/pytorch/issues/54846
 from tqdm.notebook import tqdm 
 from torch.nn import functional as F
 from torch import nn
@@ -52,7 +52,7 @@ class ResBlockG(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self,n_dims=512,max_resolutions=256,initial_layer="tconv",upsampling_mode="tconv",attention_loc=32):
+    def __init__(self,n_dims=512,max_resolutions=256,lr=0.01,betas=(0.999),initial_layer="tconv",upsampling_mode="tconv",attention_loc=32):
         super().__init__()
         self.n_dims = n_dims
         self.initial_layer = initial_layer
@@ -78,6 +78,7 @@ class Generator(nn.Module):
         else:
             self.layers.append(ResBlockG(in_channels=out_channels[2**(index)], out_channels=3,upsampling_mode=upsampling_mode))
             self.layers.append(nn.Tanh())
+        self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
         
     def forward(self,inputs):
         x = self.inputs(inputs)
@@ -115,10 +116,12 @@ class ResBlockD(nn.Module):
         elif(self.downsampling_mode=="pooling"):
             _,_,h,w = inputs.shape
             output = F.adaptive_avg_pool2d(main, output_size=(h//2,w//2)) + F.adaptive_avg_pool2d(shutcut, output_size=(h//2,w//2))
+        else:
+            output = main + shutcut
         return output
 
 class Discriminator(nn.Module):
-    def __init__(self,max_resolutions=256,activation="leakyrelu",downsampling_mode="conv",attention_loc=32):
+    def __init__(self,max_resolutions=256,lr=0.01,betas=(0,0.999),activation="leakyrelu",downsampling_mode="conv",attention_loc=32):
         super().__init__()
         out_channels={
             4:1024,
@@ -144,6 +147,7 @@ class Discriminator(nn.Module):
                 GlobalSum(),
                 sn_linear(in_features=out_channels[max_resolutions//2**(index+2)],out_features=1)
             ])
+        self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
         
     def forward(self,inputs):
         x = inputs
@@ -161,61 +165,40 @@ class SAGAN(GAN):
             d_lr=1e-3,
             g_betas=(0,0.9),
             d_betas=(0,0.9),
-            is_da = True,
             initial_layer="tconv",
             upsampling_mode="tconv",
             downsampling_mode="conv",
-            loss_fn = "hinge",
+            loss  = "hinge",
             attention_loc=32
         ):
         super().__init__()
         self.n_dis = n_dis
         self.initial_layer = initial_layer
         self.device = "cuda" if (torch.cuda.is_available()) else "cpu"
-        self.netD = Discriminator(n_dims,max_resolutions,lr=d_lr,betas=d_betas,downsampling_mode=downsampling_mode,attention_loc=attention_loc).to(self.device)
-        self.netG = Generator(n_dims,max_resolutions,lr=g_lr,betas=g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode,attention_loc=attention_loc).to(self.device)
+        self.netD = Discriminator(max_resolutions,d_lr,d_betas,downsampling_mode=downsampling_mode,attention_loc=attention_loc).to(self.device)
+        self.netG = Generator(n_dims,max_resolutions,g_lr,g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode,attention_loc=attention_loc).to(self.device)
         self.n_dims = n_dims
-        self.loss = loss_fn
-        if(loss_fn=="hinge"):
-            self.loss_fn = hinge
-        elif(loss_fn=="wgangp"):
-            self.loss_fn = Wgangp(self.netD,self.device)
-        self.is_da = is_da
-        if(is_da):
-            self.data_aug = DifferentAugmentation((max_resolutions,max_resolutions),30)
-            self.lambda_bcr = 10
+        self.loss = Hinge() if loss == "hinge" else WassersteinGP(self.netD)
         if(self.initial_layer=="tconv"):
             self.fixed_noise = torch.randn(size=(16,self.n_dims,1,1),device=self.device)
         else:
             self.fixed_noise = torch.randn(size=(16,self.n_dims),device=self.device)
-        self.optimizer_d = torch.optim.Adam(self.netD.parameters(),lr=d_lr,betas=d_betas)
-        self.optimizer_g = torch.optim.Adam(self.netG.parameters(),lr=g_lr,betas=g_betas)
 
     def train_d(self,real_img,fake_img):
-        self.netD.zero_grad()
-        self.netG.zero_grad()
-        dx = self.netD(real_img)
-        dgx = self.netD(fake_img)
-        if(self.loss == "hinge"):
-            loss = self.loss_fn(dx, dgx)
-        elif(self.loss == "wgangp"):
-            loss = self.loss_fn(real_img,fake_img,dx,dgx)
-        if(self.is_da):
-            dx_aug = self.netD(self.data_aug.apply(real_img,target=True))
-            dgx_aug = self.netD(self.data_aug.apply(fake_img,target=False))
-            l_bcr = torch.linalg.norm(dx-dx_aug) + torch.linalg.norm(dgx-dgx_aug)
-            loss += l_bcr * self.lambda_bcr 
+        self.netD.optimizer.zero_grad()
+        real = self.netD(real_img)
+        fake = self.netD(fake_img)
+        loss = self.loss(real,fake,real_img,fake_img)
         loss.backward()
-        self.optimizer_d.step()
+        self.netD.optimizer.step()
         return loss
         
     def train_g(self,fake_img):
-        self.netG.zero_grad()
-        self.netD.zero_grad()
-        dgx = self.netD(fake_img)
-        loss = -dgx.mean()
+        self.netG.optimizer.zero_grad()
+        fake = self.netD(fake_img)
+        loss = -fake.mean()
         loss.backward()
-        self.optimizer_g.step()
+        self.netG.optimizer.step()
         return loss
     
     def generate(self):
@@ -224,7 +207,7 @@ class SAGAN(GAN):
         else:
             noise = torch.randn(size=(1,self.n_dims),device=self.device)
         with torch.no_grad():
-            img = torch.squeeze(self.netG(noise),dim=0)
+            img = (torch.squeeze(self.netG(noise),dim=0) +1)/2
         return img
 
     def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True):

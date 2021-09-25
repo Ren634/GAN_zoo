@@ -71,3 +71,5 @@ pggan.fit(dataset,epochs=[1,2,3,4,5,6,7],batch_size=[2,3,5,7,11,13,17],is_tensor
 generated_image = pggan.generate(image_num=16) 
 #return torch tensor (generated_image.shape->(image_num,3,max_resolutions,max_resolutions))
 ```
+### LightWeight GAN
+Under development

@@ -52,7 +52,7 @@ class ResBlockG(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self,n_dims=512,max_resolutions=256,lr=0.01,betas=(0.999),initial_layer="tconv",upsampling_mode="tconv",attention_loc=32):
+    def __init__(self,n_dims=512,max_resolution=256,lr=0.01,betas=(0.999),initial_layer="tconv",upsampling_mode="tconv",attention_loc=32):
         super().__init__()
         self.n_dims = n_dims
         self.initial_layer = initial_layer
@@ -71,7 +71,7 @@ class Generator(nn.Module):
             512:8
         }
         self.layers = nn.ModuleList([ResBlockG(in_channels=self.n_dims, out_channels=out_channels[4],upsampling_mode=upsampling_mode)]) 
-        for index in range(3,int(log2(max_resolutions))-1):
+        for index in range(3,int(log2(max_resolution))-1):
             self.layers.append(ResBlockG(in_channels=out_channels[2**(index-1)],out_channels=out_channels[2**(index)],upsampling_mode=upsampling_mode))
             if(attention_loc == 2**(index)):
                 self.layers.append(SelfAttention(in_channels=out_channels[2**(index)]))
@@ -121,7 +121,7 @@ class ResBlockD(nn.Module):
         return output
 
 class Discriminator(nn.Module):
-    def __init__(self,max_resolutions=256,lr=0.01,betas=(0,0.999),activation="leakyrelu",downsampling_mode="conv",attention_loc=32):
+    def __init__(self,max_resolution=256,lr=0.01,betas=(0,0.999),activation="leakyrelu",downsampling_mode="conv",attention_loc=32):
         super().__init__()
         out_channels={
             4:1024,
@@ -133,19 +133,19 @@ class Discriminator(nn.Module):
             256:16,
             512:8,
         }
-        self.layers = nn.ModuleList([ResBlockD(in_channels=3, out_channels=out_channels[max_resolutions],activation=activation,downsampling_mode=downsampling_mode)])
-        for index in range(int(log2(max_resolutions))-4):
-            self.layers.append(ResBlockD(in_channels=out_channels[max_resolutions//2**(index)], out_channels=out_channels[max_resolutions//2**(index+1)],activation=activation,downsampling_mode=downsampling_mode))
-            if((max_resolutions//2**(index+1))==attention_loc):
-                self.layers.append(SelfAttention(in_channels=out_channels[max_resolutions//2**(index+1)]))
+        self.layers = nn.ModuleList([ResBlockD(in_channels=3, out_channels=out_channels[max_resolution],activation=activation,downsampling_mode=downsampling_mode)])
+        for index in range(int(log2(max_resolution))-4):
+            self.layers.append(ResBlockD(in_channels=out_channels[max_resolution//2**(index)], out_channels=out_channels[max_resolution//2**(index+1)],activation=activation,downsampling_mode=downsampling_mode))
+            if((max_resolution//2**(index+1))==attention_loc):
+                self.layers.append(SelfAttention(in_channels=out_channels[max_resolution//2**(index+1)]))
         else:
             self.layers.extend([
-                ResBlockD(in_channels=out_channels[max_resolutions//2**(index+1)], out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=downsampling_mode),
+                ResBlockD(in_channels=out_channels[max_resolution//2**(index+1)], out_channels=out_channels[max_resolution//2**(index+2)],activation=activation,downsampling_mode=downsampling_mode),
                 MiniBatchStddev(),
-                ResBlockD(in_channels=out_channels[max_resolutions//2**(index+2)]+1, out_channels=out_channels[max_resolutions//2**(index+2)],activation=activation,downsampling_mode=None),
+                ResBlockD(in_channels=out_channels[max_resolution//2**(index+2)]+1, out_channels=out_channels[max_resolution//2**(index+2)],activation=activation,downsampling_mode=None),
                 get_activation(activation),
                 GlobalSum(),
-                sn_linear(in_features=out_channels[max_resolutions//2**(index+2)],out_features=1)
+                sn_linear(in_features=out_channels[max_resolution//2**(index+2)],out_features=1)
             ])
         self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
         
@@ -160,7 +160,7 @@ class SAGAN(GAN):
             self,
             n_dims,
             n_dis,
-            max_resolutions,
+            max_resolution,
             g_lr=1e-3,
             d_lr=1e-3,
             g_betas=(0,0.9),
@@ -175,8 +175,8 @@ class SAGAN(GAN):
         self.n_dis = n_dis
         self.initial_layer = initial_layer
         self.device = "cuda" if (torch.cuda.is_available()) else "cpu"
-        self.netD = Discriminator(max_resolutions,d_lr,d_betas,downsampling_mode=downsampling_mode,attention_loc=attention_loc).to(self.device)
-        self.netG = Generator(n_dims,max_resolutions,g_lr,g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode,attention_loc=attention_loc).to(self.device)
+        self.netD = Discriminator(max_resolution,d_lr,d_betas,downsampling_mode=downsampling_mode,attention_loc=attention_loc).to(self.device)
+        self.netG = Generator(n_dims,max_resolution,g_lr,g_betas,initial_layer=initial_layer,upsampling_mode=upsampling_mode,attention_loc=attention_loc).to(self.device)
         self.n_dims = n_dims
         self.loss = Hinge() if loss == "hinge" else WassersteinGP(self.netD)
         if(self.initial_layer=="tconv"):
@@ -201,20 +201,20 @@ class SAGAN(GAN):
         self.netG.optimizer.step()
         return loss
     
-    def generate(self):
+    def generate(self,image_num=1):
         if(self.initial_layer=="tconv"):
-            noise = torch.randn(size=(1,self.n_dims,1,1),device=self.device)
+            noise = torch.randn(size=(image_num,self.n_dims,1,1),device=self.device)
         else:
-            noise = torch.randn(size=(1,self.n_dims),device=self.device)
+            noise = torch.randn(size=(image_num,self.n_dims),device=self.device)
         with torch.no_grad():
-            img = (torch.squeeze(self.netG(noise),dim=0) +1)/2
+            img = (self.netG(noise) +1)/2
         return img
 
-    def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True):
+    def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True,image_num=100):
         if(is_tensorboard):
             log_writer = tensorboard.SummaryWriter(log_dir="./logs")
         loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size,shuffle=shuffle,num_workers=num_workers)
-        save_num = len(loader) // 10
+        save_num = len(loader) // image_num
         for epoch in tqdm(range(epochs),desc="Epochs",total=epochs+self.total_epochs,initial=self.total_epochs):
             for step,data in enumerate(tqdm(loader,desc="Steps",leave=False),start=1):
                 real_imgs,_ = data

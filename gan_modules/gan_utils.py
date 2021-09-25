@@ -24,13 +24,13 @@ def save_img(imgs,file_name,img_format="png",is_grid=True):
     imgs.save(file_path)
 
 class DataLoader(torch.utils.data.Dataset):
-    def __init__(self,path,resolutions,data_format="jpg"):
+    def __init__(self,path,resolution,data_format="jpg"):
         super().__init__()
         if(path[-1]=='/'):
             file_paths = path +"*."+data_format
         else:
             file_paths = path +"/*."+data_format
-        self.resolutions = resolutions
+        self.resolution = resolution
         self.file_names = glob.glob(file_paths,recursive=True)
         self.file_paths = path
 
@@ -40,7 +40,7 @@ class DataLoader(torch.utils.data.Dataset):
     def __getitem__(self, index):
         label = 1
         img = torchvision.io.read_image(self.file_names[index])
-        img = TF.resize(img, size=self.resolutions)
+        img = TF.resize(img, size=self.resolution)
         img = (img - 127.5)/127.5
         return img,label
 

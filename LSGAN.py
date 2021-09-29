@@ -153,6 +153,13 @@ class LSGAN(GAN):
         if(self.is_moving_average):
             self.ema.apply(self.netG,self.mvag_netG)
         return loss
+
+    def generate(self,img_num=1):
+        netG = self.mvag_netG if self.is_moving_average else self.netG
+        with torch.no_grad():
+            x = torch.randn(size=(img_num,self.n_dims,1,1))
+            output = netG(x)
+        return netG
     
     def fit(self,dataset,epochs,batch_size=10,shuffle=True,num_workers=0,is_tensorboard=True,image_num=100):
         if(is_tensorboard):

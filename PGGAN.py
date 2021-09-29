@@ -481,10 +481,10 @@ class PGGAN(GAN):
         begin,end = int(log2(self.netG.img_size.item())),int(log2(current_size))
         for _ in range(begin,end):
             self.update_network() 
+        super().load_model(load_path)
         if(self.is_moving_average):
             self.mvag_netG.load_state_dict(params["model_state_mvagg"])
             self.ema.iter_counter = self.total_steps // self.n_dis
             self.ema.setup(self.mvag_netG)
-        super().load_model(load_path)
         self.is_load = True
         

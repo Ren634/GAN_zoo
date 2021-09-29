@@ -440,7 +440,7 @@ class PGGAN(GAN):
         file_paths = dataset.file_paths
         with tqdm(initial=current_size,desc="Image size",total=self.max_resolution) as progress_bar:
             for index,img_size in enumerate(range_step_multiply(begin,end)):
-                dataset = DataLoader(file_paths,resolutions=img_size)
+                dataset = DataLoader(file_paths,resolution=img_size)
                 loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size[index],shuffle=shuffle,num_workers=num_workers)
                 save_num = len(loader) // image_num
                 sample_num = len(loader)*epochs[index]/2

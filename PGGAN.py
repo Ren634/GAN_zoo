@@ -71,7 +71,7 @@ class BlockG(nn.Module):
 class RGBAdd(nn.Module):
     def __init__(self,sample_size):
         super().__init__()
-        self.alpha = torch.tensor(0.)
+        self.alpha = torch.tensor(1.)
         self.const = torch.tensor(1 / sample_size)
         self.register_buffer("coef",self.alpha)
         self.register_buffer("additional factor",self.const)
@@ -155,11 +155,14 @@ class Generator(nn.Module):
         self.img_size *= 2
         
     def setup_optimizer(self,lr,betas):
+        self.lr = lr
         self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
     
-    def update_optimizer(self):
+    def update_optimizer(self,scheduling_rate):
             parameters = list(self.main[-1].parameters()) + list(self.to_RGB["up_to_date"].parameters())
             self.optimizer.add_param_group({"params":parameters})
+            for param in self.optimizer.param_groups:
+                param["lr"] = self.lr * scheduling_rate
 
     def AddRGB_update(self):
         layer = self.output_layer
@@ -274,11 +277,14 @@ class Discriminator(nn.Module):
         self.img_size *= 2
 
     def setup_optimizer(self,lr,betas):
+        self.lr = lr
         self.optimizer = torch.optim.Adam(self.parameters(),lr=lr,betas=betas)
 
-    def update_optimizer(self):
+    def update_optimizer(self,scheduling_rate):
         parameters = list(self.main[0].parameters()) + list(self.fromRGB["up_to_date"].parameters())
         self.optimizer.add_param_group({"params":parameters})
+        for param in self.optimizer.param_groups:
+            param["lr"] = self.lr * scheduling_rate
 
     def AddRGB_update(self):
         layer = self.add_fromRGB
@@ -368,19 +374,20 @@ class PGGAN(GAN):
             self.mvag_netG.AddRGB_update()
         return loss
     
-    def update_network(self):
+    def update_network(self,scheduling_rate=1):
         self.netD.update()
-        self.netD.update_optimizer()
+        self.netD.update_optimizer(scheduling_rate)
         self.netG.update()
-        self.netG.update_optimizer()
+        self.netG.update_optimizer(scheduling_rate)
         self.netD.AddRGB_reset()
         self.netG.AddRGB_reset()
+        self.ema.iter_counter = 0
         if(self.is_moving_average):
             self.mvag_netG.update()
             self.mvag_netG.AddRGB_reset()
         self.total_epochs = 0
 
-    def train(self,loader,epochs,img_size,save_num,is_tensorboard): 
+    def train(self,loader,epochs,scheduling_rate,img_size,save_num,is_tensorboard): 
         for epoch in tqdm(range(epochs),desc="Epochs",total=epochs+self.total_epochs,initial=self.total_epochs,leave=False):
             for step,data in enumerate(tqdm(loader,desc="Steps",leave=False),start=1):
                 real_imgs,_ = data
@@ -413,7 +420,7 @@ class PGGAN(GAN):
                     with torch.no_grad():
                         sample_img = scale_pixel(netG(self.fixed_noise))
                         sample_img = sample_img.to("cpu")
-                    save_img(sample_img, file_name=f"size_{img_size}epoch{self.total_epochs}_step{step}")
+                    save_img(sample_img, file_name=f"size_{img_size}epoch{self.total_epochs}_step{step}") 
                     for i in range(5):
                         check_vec = torch.randn(size=(1,self.n_dims,1,1),device=device)
                         with torch.no_grad():
@@ -425,10 +432,10 @@ class PGGAN(GAN):
             self.total_epochs += 1
             if((epoch+1) % 1 == 0):
                 self.save_model(f"params\size{img_size}_epoch_{self.total_epochs-1}")
-        self.update_network()
+        self.update_network(scheduling_rate)
        
 
-    def fit(self,dataset,epochs,batch_size,shuffle=True,num_workers=0,is_tensorboard=True,image_num=10):
+    def fit(self,dataset,epochs,batch_size,scheduling_rate=1,shuffle=True,num_workers=0,is_tensorboard=True,image_num=10):
         if(is_tensorboard):
             self.log_writer = tensorboard.SummaryWriter(log_dir="./logs") 
         if(not self.is_load):
@@ -436,7 +443,7 @@ class PGGAN(GAN):
         current_size = self.netG.img_size.item()
         begin = int(log2(current_size))
         end = int(log2(self.max_resolution)) 
-        epochs,batch_size = listing(epochs,begin,end),listing(batch_size,begin,end)
+        epochs,batch_size,scheduling_rate = listing(epochs,begin,end),listing(batch_size,begin,end),listing(scheduling_rate,begin,end)
         file_paths = dataset.file_paths
         with tqdm(initial=current_size,desc="Image size",total=self.max_resolution) as progress_bar:
             for index,img_size in enumerate(range_step_multiply(begin,end)):
@@ -448,7 +455,7 @@ class PGGAN(GAN):
                 self.netD.sample_size = sample_num
                 if(self.is_moving_average):
                     self.mvag_netG.sample_size = sample_num
-                self.train(loader,epochs[index],img_size,save_num,is_tensorboard)
+                self.train(loader,epochs[index],scheduling_rate[index],img_size,save_num,is_tensorboard)
                 progress_bar.update(progress_bar.n)
                 del loader 
                 
